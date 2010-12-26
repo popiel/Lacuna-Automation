@@ -1,0 +1,107 @@
+#!/usr/bin/perl
+
+use strict;
+
+use Carp;
+use Client;
+use Getopt::Long;
+use IO::Handle;
+use JSON::XS;
+
+autoflush STDOUT 1;
+autoflush STDERR 1;
+
+my $config_name = "config.json";
+my $body_name;
+my $queue_name;
+my $debug = 0;
+
+GetOptions(
+  "config=s" => \$config_name,
+  "body=s"   => \$body_name,
+  "queue=s"  => \$queue_name,
+  "debug"    => \$debug,
+) or die "$0 --config=foo.yaml --body=Bar --queue=queue.file\n";
+
+my $client = Client->new(config => $config_name);
+my $body_id;
+if ($body_name) {
+  my $planets = $client->empire_status->{planets};
+  for my $id (keys(%$planets)) {
+    $body_id = $id if $planets->{$id} =~ /$body_name/;
+  }
+  die "No matching planet for name $body_name\n" unless $body_id;
+} else {
+  $body_id = $client->empire_status->{home_planet_id};
+}
+
+my $buildings = $client->body_buildings($body_id);
+exit(0) if grep($_->{pending_build}, values(%{$buildings->{buildings}}));
+
+$body_name = $client->body_status($body_id)->{name};
+
+$queue_name ||= "$body_name.queue";
+$queue_name =~ s/\s+/_/g;
+
+print "Reading build queue $queue_name\n" if $debug;
+my $file;
+open($file, "<", $queue_name) or die "Couldn't read queue file $queue_name: $!\n";
+my @queue = (<$file>);
+close $file;
+
+for my $j ($[..$#queue) {
+  my $command = $queue[$j];
+  chomp $command;
+  print "Inspecting $command\n" if $debug;
+  if ($command =~ /^build (.*)/o) {
+    my $name = $1;
+    my $buildable = $client->body_buildable($body_id);
+    my $reqs = $buildable->{buildable}{$name};
+    unless ($reqs && $reqs->{build}{can}) {
+      emit("Cannot build $name: $reqs->{build}{reason}[1]");
+      next;
+    }
+    my $build = $client->body_build($body_id, $name);
+    if ($build) {
+        emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
+      splice(@queue, $j, 1);
+      write_queue();
+      exit(0);
+    }
+  }
+  if ($command =~ /^upgrade (\d+) (.*)/o) {
+    my $level = $1;
+    my $name = $2;
+
+    my $result = $client->body_buildings($body_id);
+    for my $id (keys %{$result->{buildings}}) {
+      my $building = $result->{buildings}{$id};
+      print "Matching against $building->{level} $building->{name}\n" if $debug;
+      if ($building->{name} eq $name && (!$level || $building->{level} == $level)) {
+        my $view = $client->building_view($building->{url}, $id);
+        unless ($view && $view->{building}{upgrade}{can}) {
+          emit("Cannot upgrade $level $name: $view->{building}{upgrade}{reason}[1]");
+          next;
+        }
+        my $upgrade = $client->building_upgrade($building->{url}, $id);
+        emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+        splice(@queue, $j, 1);
+        write_queue();
+        exit(0);
+      }
+    }
+  }
+}
+
+sub emit {
+  my $message = shift;
+  print Client::format_time(time())." $body_name: $message\n";
+}
+
+sub write_queue {
+  my $file;
+  open($file, ">", "$queue_name.$$") or croak "Could not write queue file $queue_name.$$: $!";
+  print $file join("", @queue);
+  close $file;
+  rename("$queue_name.$$", $queue_name) or croak "Could not rename queue file $queue_name.$$ to $queue_name: $!";
+}
