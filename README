@@ -1,0 +1,25 @@
+This is a simple client implementation for Lacuna Expanse (https://lacunaexpanse.com/),
+with some ability to automate building on your planets.
+
+This client is not as complete as Games::Lacuna::Client,
+but it does make reasonable attempts to handle cache invalidation properly.
+
+The main scripts of interest are:
+
+show_planet [--body Name]
+  Give a text representation of the status of one of your planets.
+
+build_queue [--body Name] [--queue Name]
+  Try to build / upgrade something on one of your planets,
+  based on a queue of desired builds.
+  This is intended to be run from cron, once per minute, for each planet.
+
+project.pl [--body Name]
+  Try to predict resource levels and completion times for a sequence of builds.
+  Only supports buildings you already have at least one copy of on the planet,
+  due to limitations of the API.
+
+get_json [element/path [file ...]]
+  This pretty-prints json, optionally selecting just a portion of the input
+  (picking hash elements per the supplied path).
+  Input is from stdin, or files named after the element path.
