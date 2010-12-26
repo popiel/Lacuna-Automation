@@ -1,0 +1,7 @@
+#!/bin/bash
+
+cd /home/popiel/games/lacuna
+for n in Sea State Causes; do
+  ./build_queue --body $n >>build.log 2>&1;
+done
+
