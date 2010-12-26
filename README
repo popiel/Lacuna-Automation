@@ -13,6 +13,7 @@ build_queue [--body Name] [--queue Name]
   Try to build / upgrade something on one of your planets,
   based on a queue of desired builds.
   This is intended to be run from cron, once per minute, for each planet.
+  Look at the sample build queue template for an idea of how to format the build queue.
 
 project.pl [--body Name]
   Try to predict resource levels and completion times for a sequence of builds.
