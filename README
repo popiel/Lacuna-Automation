@@ -17,6 +17,11 @@ build_queue [--body Name] [--queue Name]
   so you probably want to put it in a wrapper script.
   Look at the sample build queue template for an idea of how to format the build queue.
 
+park_ranger [--body Name]
+  Try to throw parties in all parks on the planet.
+  This is intended to be run from cron, once per minute,
+  for each planet where you want continuous parties.
+
 cron_target.template
   Sample wrapper script for build_queue.
 

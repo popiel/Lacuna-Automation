@@ -290,4 +290,15 @@ sub building_stats_for_level {
   return $result;
 }
 
+sub park_party {
+  my $self = shift;
+  my $building_id = shift;
+  my $level = shift;
+
+  my $result = $self->call(park => throw_a_party => $building_id);
+  unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
+  unlink("cache/building/$building_id/view") if $result;
+  return $result;
+}
+
 1;
