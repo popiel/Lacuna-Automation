@@ -254,7 +254,7 @@ sub building_upgrade {
 
   my $result = $self->call($url => upgrade => $building_id);
   unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
-  unlink("cache/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery/;
+  unlink("cache/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;
   unlink("cache/building/$building_id/view") if $result;
   return $result;
 }
@@ -293,9 +293,21 @@ sub building_stats_for_level {
 sub park_party {
   my $self = shift;
   my $building_id = shift;
-  my $level = shift;
 
   my $result = $self->call(park => throw_a_party => $building_id);
+  unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
+  unlink("cache/building/$building_id/view") if $result;
+  return $result;
+}
+
+sub recycle_recycle {
+  my $self = shift;
+  my $building_id = shift;
+  my $water = shift;
+  my $ore = shift;
+  my $energy = shift;
+
+  my $result = $self->call(wasterecycling => recycle => $building_id, $water, $ore, $energy, 0);
   unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
   unlink("cache/building/$building_id/view") if $result;
   return $result;

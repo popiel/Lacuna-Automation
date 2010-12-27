@@ -6,3 +6,4 @@ for n in Sea State Causes; do
 done
 
 ./park_ranger --body Causes >>build.log 2>&1
+./trashman    --body Sea    >>build.log 2>&1
