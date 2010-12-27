@@ -22,8 +22,13 @@ park_ranger [--body Name]
   This is intended to be run from cron, once per minute,
   for each planet where you want continuous parties.
 
+trashman [--body Name]
+  Recycle some waste if capacity > half full.
+  Distributes the waste proportionally to space available in ore, water, and energy.
+  This will recycle waste in chunks of about 10 minutes duration.
+
 cron_target.template
-  Sample wrapper script for build_queue.
+  Sample wrapper script for build_queue, park_ranger, and trashman.
 
 project.pl [--body Name]
   Try to predict resource levels and completion times for a sequence of builds.
