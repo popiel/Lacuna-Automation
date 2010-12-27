@@ -12,7 +12,7 @@ my $body_name;
 GetOptions(
   "config=s" => \$config_name,
   "body=s"   => \$body_name,
-) or die "$0 --config=foo.yaml --body=Bar\n";
+) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
 my $body_id;

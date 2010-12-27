@@ -15,7 +15,7 @@ GetOptions(
   "config=s"        => \$config_name,
   "body=s"          => \$body_name,
   "initial|start=s" => \$initial_name,
-) or die "$0 --config=foo.yaml --body=Bar\n";
+) or die "$0 --config=foo.json --body=Bar\n";
 
 my $options = "";
 $options .= " --config $config_name" if $config_name;

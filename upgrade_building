@@ -16,7 +16,7 @@ GetOptions(
   "body=s"     => \$body_name,
   "building=s" => \$building_name,
   "level=i"    => \$level,
-) or die "$0 --config=foo.yaml --body=Bar --building=Mine --level=1\n";
+) or die "$0 --config=foo.json --body=Bar --building=Mine --level=1\n";
 
 my $client = Client->new(config => $config_name);
 my $body_id;

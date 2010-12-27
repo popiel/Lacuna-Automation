@@ -21,7 +21,7 @@ GetOptions(
   "body=s"   => \$body_name,
   "queue=s"  => \$queue_name,
   "debug"    => \$debug,
-) or die "$0 --config=foo.yaml --body=Bar --queue=queue.file\n";
+) or die "$0 --config=foo.json --body=Bar --queue=queue.file\n";
 
 my $client = Client->new(config => $config_name);
 my $body_id;
