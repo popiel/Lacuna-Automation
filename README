@@ -27,8 +27,11 @@ trashman [--body Name]
   Distributes the waste proportionally to space available in ore, water, and energy.
   This will recycle waste in chunks of about 10 minutes duration.
 
+repairman [--body Name]
+  Repair any damaged buildings.
+
 cron_target.template
-  Sample wrapper script for build_queue, park_ranger, and trashman.
+  Sample wrapper script for build_queue, park_ranger, repairman, and trashman.
 
 project.pl [--body Name]
   Try to predict resource levels and completion times for a sequence of builds.

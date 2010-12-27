@@ -259,6 +259,17 @@ sub building_upgrade {
   return $result;
 }
 
+sub building_repair {
+  my $self = shift;
+  my $url = shift;
+  my $building_id = shift;
+
+  my $result = $self->call($url => repair => $building_id);
+  unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
+  unlink("cache/building/$building_id/view") if $result;
+  return $result;
+}
+
 sub building_view {
   my $self = shift;
   my $url = shift;
