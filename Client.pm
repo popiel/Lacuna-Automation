@@ -132,6 +132,9 @@ sub read_session {
 sub write_session {
   my $self = shift;
 
+  my $dir = "cache";
+  -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
+
   my $file;
   open($file, ">", "cache/session_id") or die "Couldn't write cache/session_id: $!";
   print $file "$self->{session_id}\n";
