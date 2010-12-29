@@ -208,7 +208,7 @@ sub empire_status {
   my $self = shift;
 
   my $result = $self->read_json("cache/empire/$self->{empire_name}/status");
-  return $result if $result->{_time} >= time() - 500;
+  return $result if $result->{_time} >= time() - 610;
   my $result = $self->call(empire => login => $self->{empire_name}, $self->{empire_password}, $self->{api_key});
   return $result->{status}{empire} if $result->{status}{empire};
   croak "Couldn't get empire status";
@@ -253,7 +253,7 @@ sub body_buildable {
   my @completions;
   for my $building (values(%{$buildings->{buildings}})) {
     next unless $building->{pending_build};
-    next unless $building->{name} =~ /Oversight|Ore Refinery|Intelligence|University/;
+    # next unless $building->{name} =~ /Oversight|Ore Refinery|Intelligence|University/;
     push(@completions, parse_time($building->{pending_build}{end}));
   }
   $result->{_invalid} = List::Util::min(time() + 600, @completions);
