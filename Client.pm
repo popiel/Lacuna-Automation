@@ -80,6 +80,37 @@ sub format_time {
   sprintf("%4d-%02d-%02d %02d:%02d:%02d", @elems);
 }
 
+sub log_call {
+  my $api = shift;
+  my $message = shift;
+  my $response = shift;
+  our $time;
+  our $count;
+
+  my $dir = "log";
+  -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
+  my $now = time();
+  if ($time ne $now) {
+    $time = $now;
+    $count = 0;
+  } else {
+    $count++;
+  }
+
+  my $filename = join(".", format_time($time), sprintf("%03d", $count), $api, $message->{method});
+  $filename =~ s-/--g;
+  $filename =~ s- -_-g;
+  my $file;
+  open($file, ">", "log/$filename") or croak "Could not log call: $!";
+  print $file encode_json({
+    api => $api,
+    message => $message,
+    status => $response->status_line,
+    response => $response->content,
+  });
+  close($file);
+}
+
 sub call {
   my $self = shift;
   my $api = shift;
@@ -93,6 +124,7 @@ sub call {
   # warn "Posting to ".($self->{uri} . $api)."\n";
   # warn "Content: ".encode_json($message)."\n";
   my $response = $self->{ua}->post($self->{uri} . $api, Content => encode_json($message));
+  log_call($api, $message, $response);
   my $result = decode_json($response->content);
   croak join(": ", $result->{error}{code}, $result->{error}{message},
              JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}))
