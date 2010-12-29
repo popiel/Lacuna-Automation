@@ -82,6 +82,8 @@ my @foods = (
   "Lapis Pie Bakery",          # 3
   "Dairy Farm",                # 66
   "Cheese Maker",              # 3
+  "Algae Pond",
+  "Malcud Field",
 );
 
 for my $type (@foods) {

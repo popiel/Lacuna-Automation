@@ -42,10 +42,23 @@ my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$bui
 
 my @parks = sort { $b->{level} <=> $a->{level} } grep($_->{name} eq "Park", @buildings);
 
+my $trade = (grep($buildings->{buildings}{$_}{name} eq "Trade Ministry", keys(%{$buildings->{buildings}})))[0];
+
 for my $park (@parks) {
   next if $park->{work};
+  my $before = $client->call(trade => get_stored_resources => $trade);
   my $party = $client->park_party($park->{id});
-  emit("Threw party for $party->{party}{happiness} happiness.");
+  my $after = $client->call(trade => get_stored_resources => $trade);
+  my @used;
+  for my $food (qw(algae apple bean beetle bread burger
+                   cheese chip cider corn fungus lapis
+                   meal milk pancake pie potato root
+                   shake soup syrup wheat)) {
+    if ($before->{resources}{$food} > $after->{resources}{$food}) {
+      push(@used, ($before->{resources}{$food} - $after->{resources}{$food})." $food");
+    }
+  }
+  emit("Threw level $park->{level} party for $party->{party}{happiness} happiness, using ".join(", ", @used).".");
 }
 
 sub emit {
