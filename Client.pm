@@ -97,6 +97,18 @@ sub log_call {
     $count++;
   }
 
+  eval { confess("stacktrace") };
+  my $stack = $@;
+
+  my $password;
+  if ($api eq "/empire" && $message->{method} eq "login") {
+    my $password = $message->{params}[1];
+    $message->{params}[1] = "password elided";
+    my $pattern = $password;
+    $pattern =~ s/(\W)/\\$1/g;
+    $stack =~ s/$pattern/password elided/g;
+  }
+
   my $filename = join(".", format_time($time), sprintf("%03d", $count), $api, $message->{method});
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
@@ -107,8 +119,13 @@ sub log_call {
     message => $message,
     status => $response->status_line,
     response => $response->content,
+    stack => $stack,
   });
   close($file);
+
+  if ($api eq "empire" && $message->{method} eq "login") {
+    $message->{params}[1] = $password;
+  }
 }
 
 sub call {
