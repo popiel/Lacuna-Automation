@@ -376,4 +376,15 @@ sub recycle_recycle {
   return $result;
 }
 
+sub archaeology_search {
+  my $self = shift;
+  my $building_id = shift;
+  my $ore = shift;
+
+  my $result = $self->call(archaeology => search_for_glyph => $building_id, $ore);
+  unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
+  unlink("cache/building/$building_id/view") if $result;
+  return $result;
+}
+
 1;
