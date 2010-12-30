@@ -28,36 +28,6 @@ if ($body_name) {
 
 my $result = $client->body_buildings($body_id);
 
-my $build_end;
-my %buildings;
-for my $id (keys %{$result->{buildings}}) {
-  my $building = $result->{buildings}{$id};
-  warn "Viewing building $building->{name}\n";
-  $buildings{$building->{name}}{$building->{level}}{$id} = $client->building_view($building->{url}, $id);
-  if ($building->{pending_build}) {
-    my $time = Client::parse_time($building->{pending_build}{end});
-    $build_end = $time if $build_end < $time;
-  }
-}
-
-my $body = $result->{status}{body};
-print "$body->{star_name} $body->{orbit}: $body->{name}\n";
-print "Invalid after ".format_time($result->{_invalid})."\n";
-print "Builds complete at ".format_time($build_end)."\n" if $build_end;
-print "\n";
-printf ("Food  : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "food"));
-printf ("Ore   : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "ore"));
-printf ("Water : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "water"));
-printf ("Energy: %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "energy"));
-printf ("Waste : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "waste"));
-print "\n";
-print "Buildings:";
-# print "\nStorage:\n";
-# list_buildings_for_production(\%buildings, [ qw(food_capacity ore_capacity water_capacity energy_capacity) ]);
-# print "\nResources:\n";
-# list_buildings_for_production(\%buildings, [ qw(ore_hour water_hour energy_hour) ]);
-print "\nFood:\n";
-
 my @foods = (
   "Planetary Command Center",  # 11
   "Malcud Fungus Farm",        # 21
@@ -85,6 +55,40 @@ my @foods = (
   "Algae Pond",
   "Malcud Field",
 );
+
+my $build_end;
+my %buildings;
+for my $id (keys %{$result->{buildings}}) {
+  my $building = $result->{buildings}{$id};
+  if (grep($_ eq $building->{name}, @foods)) {
+    warn "Viewing building $building->{name}\n";
+    $buildings{$building->{name}}{$building->{level}}{$id} = $client->building_view($building->{url}, $id);
+  } else {
+    $buildings{$building->{name}}{$building->{level}}{$id} = 1;
+  }
+  if ($building->{pending_build}) {
+    my $time = Client::parse_time($building->{pending_build}{end});
+    $build_end = $time if $build_end < $time;
+  }
+}
+
+my $body = $result->{status}{body};
+print "$body->{star_name} $body->{orbit}: $body->{name}\n";
+print "Invalid after ".format_time($result->{_invalid})."\n";
+print "Builds complete at ".format_time($build_end)."\n" if $build_end;
+print "\n";
+printf ("Food  : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "food"));
+printf ("Ore   : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "ore"));
+printf ("Water : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "water"));
+printf ("Energy: %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "energy"));
+printf ("Waste : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "waste"));
+print "\n";
+print "Buildings:";
+# print "\nStorage:\n";
+# list_buildings_for_production(\%buildings, [ qw(food_capacity ore_capacity water_capacity energy_capacity) ]);
+# print "\nResources:\n";
+# list_buildings_for_production(\%buildings, [ qw(ore_hour water_hour energy_hour) ]);
+print "\nFood:\n";
 
 for my $type (@foods) {
   next unless exists($buildings{$type});
