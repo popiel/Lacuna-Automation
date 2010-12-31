@@ -161,6 +161,11 @@ sub call {
   my $body = $result->{result}{status}{body};
   if ($body) {
     $body->{_time} = $time;
+    my @arrivals;
+    if ($body->{incoming_foreign_ships}) {
+      @arrivals = map { parse_time($_->{date_arrives}) } @{$body->{incoming_foreign_ships}};
+    }
+    $result->{_invalid} = List::Util::min(time() + 3600, @arrivals);
     $self->write_json("cache/body/$body->{id}/status", body_status => $body);
   }
   return $result->{result};
@@ -219,7 +224,7 @@ sub body_status {
   my $body_id = shift;
 
   my $result = $self->read_json("cache/body/$body_id/status");
-  return $result if $result->{_time} >= time() - 500;
+  return $result if $result->{_time} >= time() - 500 && $result->{_invalid} > time();
   my $result = $self->body_buildings($body_id);
   return $result->{status}{body} if $result->{status}{body};
   croak "Couldn't get body status";
@@ -255,6 +260,10 @@ sub body_buildable {
     next unless $building->{pending_build};
     # next unless $building->{name} =~ /Oversight|Ore Refinery|Intelligence|University/;
     push(@completions, parse_time($building->{pending_build}{end}));
+  }
+  my $body = $self->body_status($body_id);
+  if ($body->{incoming_foreign_ships}) {
+    push(@completions, map { parse_time($_->{date_arrives}) } @{$body->{incoming_foreign_ships}});
   }
   $result->{_invalid} = List::Util::min(time() + 600, @completions);
   $self->write_json("cache/body/$body_id/buildable", buildable => $result);
@@ -397,7 +406,10 @@ sub port_all_ships {
   my $result = $self->call(spaceport => view_all_ships => $building_id, $page);
   my @completions;
   for my $ship (@{$result->{ships}}) {
-    push(@completions, parse_time($ship->{date_available})) if $ship->{date_available};
+    if ($ship->{date_available}) {
+      my $available = parse_time($ship->{date_available});
+      push(@completions, $available) if $available > time() + 30;
+    }
     push(@completions, parse_time($ship->{date_arrives  })) if $ship->{date_arrives};
   }
   $result->{_invalid} = List::Util::min(time() + 3600, @completions);
