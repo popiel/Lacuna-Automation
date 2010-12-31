@@ -30,6 +30,15 @@ trashman [--body Name]
 repairman [--body Name]
   Repair any damaged buildings.
 
+archaeologist [--body Name] --ore type
+  Search for a glyph in a bunch of ore.
+
+trade_push --body Name --target Name --ship Name --cargo 'stuff' [--stay]
+  Push some resources between two planets.
+  The cargo is specified either as a single resource name
+  (in which case the ship will be fully filled),
+  or as a json hash of resource : quantity mappings.
+
 cron_target.template
   Sample wrapper script for build_queue, park_ranger, repairman, and trashman.
 

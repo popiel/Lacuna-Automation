@@ -387,4 +387,44 @@ sub archaeology_search {
   return $result;
 }
 
+sub port_all_ships {
+  my $self = shift;
+  my $building_id = shift;
+  my $page = shift;
+
+  my $result = $self->read_json("cache/building/$building_id/view_all_ships.$page");
+  return $result if $result->{_invalid} > time();
+  my $result = $self->call(spaceport => view_all_ships => $building_id, $page);
+  my @completions;
+  for my $ship (@{$result->{ships}}) {
+    push(@completions, parse_time($ship->{date_available})) if $ship->{date_available};
+    push(@completions, parse_time($ship->{date_arrives  })) if $ship->{date_arrives};
+  }
+  $result->{_invalid} = List::Util::min(time() + 3600, @completions);
+  $self->write_json("cache/building/$building_id/view_all_ships.$page", spaceport_view_all_ships => $result);
+  return $result;
+}
+
+sub trade_push {
+  my $self = shift;
+  my $building_id = shift;
+  my $target_id = shift;
+  my $items = shift;
+  my $options = shift;
+
+  my $result = $self->call(trade => push_items => $building_id, $target_id, $items, $options);
+  if ($result) {
+    unlink("cache/body/$target_id/status");
+    for my $body ($target_id, $result->{status}{body}{id}) {
+      my $buildings = $self->body_buildings($body);
+      for my $id (keys %{$buildings->{buildings}}) {
+        for my $page (1..10) {
+          unlink("cache/building/$id/view_all_ships.$page");
+        }
+      }
+    }
+  }
+  return $result;
+}
+
 1;
