@@ -158,7 +158,10 @@ sub resource_info {
   push(@list, $body->{"${resource}_stored"});
   push(@list, $body->{"${resource}_capacity"});
   push(@list, $body->{"${resource}_hour"});
-  if ($list[2] > 0) {
+  if ($list[2] == 0) {
+    push(@list, "stable");
+    push(@list, format_time($status->{_time}));
+  } elsif ($list[2] > 0) {
     push(@list, "full");
     push(@list, format_time(($list[1] - $list[0]) / $list[2] * 3600 + $status->{_time}));
   } else {
