@@ -52,13 +52,14 @@ open($file, "<", $queue_name) or die "Couldn't read queue file $queue_name: $!\n
 my @queue = (<$file>);
 close $file;
 
+my $buildable;
 for my $j ($[..$#queue) {
   my $command = $queue[$j];
   chomp $command;
   print "Inspecting $command\n" if $debug;
   if ($command =~ /^build (.*)/o) {
     my $name = $1;
-    my $buildable = $client->body_buildable($body_id);
+    $buildable ||= $client->body_buildable($body_id);
     my $reqs = $buildable->{buildable}{$name};
     unless ($reqs && $reqs->{build}{can}) {
       emit("Cannot build $name: $reqs->{build}{reason}[1]");
@@ -76,9 +77,8 @@ for my $j ($[..$#queue) {
     my $level = $1;
     my $name = $2;
 
-    my $result = $client->body_buildings($body_id);
-    for my $id (keys %{$result->{buildings}}) {
-      my $building = $result->{buildings}{$id};
+    for my $id (keys %{$buildings->{buildings}}) {
+      my $building = $buildings->{buildings}{$id};
       print "Matching against $building->{level} $building->{name}\n" if $debug;
       if ($building->{name} eq $name && (!$level || $building->{level} == $level)) {
         my $view = $client->building_view($building->{url}, $id);

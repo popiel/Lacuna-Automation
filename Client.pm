@@ -265,7 +265,7 @@ sub body_buildable {
   if ($body->{incoming_foreign_ships}) {
     push(@completions, map { parse_time($_->{date_arrives}) } @{$body->{incoming_foreign_ships}});
   }
-  $result->{_invalid} = List::Util::min(time() + 600, @completions);
+  $result->{_invalid} = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
   $self->write_json("cache/body/$body_id/buildable", buildable => $result);
   return $result;
 }
@@ -344,6 +344,7 @@ sub building_view {
     push(@completions, parse_time($building->{pending_build}{end})) if $building->{pending_build};
     push(@completions, parse_time($building->{work         }{end})) if $building->{work};
   }
+  push(@completions, time() + 300) unless $result->{building}{upgrade}{can};
   $result->{_invalid} = List::Util::min(time() + 3600, @completions);
   $self->write_json("cache/building/$building_id/view", building_view => $result);
   return $result;
