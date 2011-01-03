@@ -39,6 +39,12 @@ trade_push --body Name --target Name --ship Name --cargo 'stuff' [--stay]
   (in which case the ship will be fully filled),
   or as a json hash of resource : quantity mappings.
 
+exchange --body Colony --body Supplier [--ship NamePattern]
+  Supply the Colony with as close to equal amounts of each food and ore
+  as possible, keep it supplied with water and energy, and also cart away
+  excess waste.  You must have ships parked at each planet, named to match
+  the NamePattern (which defaults to the space-separated --body arguments).
+
 cron_target.template
   Sample wrapper script for build_queue, park_ranger, repairman, and trashman.
 
