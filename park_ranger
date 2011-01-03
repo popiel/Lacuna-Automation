@@ -34,15 +34,20 @@ if ($body_name) {
   $body_id = $client->empire_status->{home_planet_id};
 }
 
-my $buildings = $client->body_buildings($body_id);
-exit(0) if $client->body_status($body_id)->{food_stored} < 10000;
 $body_name = $client->body_status($body_id)->{name};
+$debug and print "Working on body $body_name\n";
+
+my $buildings = $client->body_buildings($body_id);
+$debug and print "Food available: ".$client->body_status($body_id)->{food_stored}."\n";
+exit(0) if $client->body_status($body_id)->{food_stored} < 10000;
 
 my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
 
 my @parks = sort { $b->{level} <=> $a->{level} } grep($_->{name} eq "Park", @buildings);
 
 my $trade = (grep($buildings->{buildings}{$_}{name} eq "Trade Ministry", keys(%{$buildings->{buildings}})))[0];
+
+$debug and print "Park count: ".scalar(@parks)."\n";
 
 for my $park (@parks) {
   next if $park->{work};
