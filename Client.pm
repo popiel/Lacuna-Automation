@@ -87,8 +87,6 @@ sub log_call {
   our $time;
   our $count;
 
-  my $dir = "log";
-  -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
   my $now = time();
   if ($time ne $now) {
     $time = $now;
@@ -96,6 +94,9 @@ sub log_call {
   } else {
     $count++;
   }
+
+  my $dir = "log/".substr(format_time($time), 0, 10);
+  -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
 
   eval { confess("stacktrace") };
   my $stack = $@;
@@ -113,7 +114,7 @@ sub log_call {
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
   my $file;
-  open($file, ">", "log/$filename") or croak "Could not log call: $!";
+  open($file, ">", "$dir/$filename") or croak "Could not log call: $!";
   print $file encode_json({
     api => $api,
     message => $message,
@@ -302,9 +303,9 @@ sub building_build {
   my $x = shift;
   my $y = shift;
 
+  unlink("cache/body/$body_id/buildable");
   my $result = $self->call($url => build => $body_id, $x, $y);
   unlink("cache/body/$body_id/buildings") if $result;
-  unlink("cache/body/$body_id/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;
   return $result;
 }
 
@@ -313,10 +314,10 @@ sub building_upgrade {
   my $url = shift;
   my $building_id = shift;
 
+  unlink("cache/building/$building_id/view");
   my $result = $self->call($url => upgrade => $building_id);
   unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
   unlink("cache/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;
-  unlink("cache/building/$building_id/view") if $result;
   return $result;
 }
 
