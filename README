@@ -6,6 +6,10 @@ but it does make reasonable attempts to handle cache invalidation properly.
 
 The main scripts of interest are:
 
+activities
+  Give a brief overview of what each planet is working on,
+  both in the build queue and in the individual work queues.
+
 show_planet [--body Name]
   Give a text representation of the status of one of your planets.
 
