@@ -31,6 +31,9 @@ trashman [--body Name]
   Distributes the waste proportionally to space available in ore, water, and energy.
   This will recycle waste in chunks of about 10 minutes duration.
 
+scowler [--body Name]
+  Shoot some waste into the local star if capacity > 3/4 full.
+
 repairman [--body Name]
   Repair any damaged buildings.
 
