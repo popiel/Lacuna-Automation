@@ -19,6 +19,7 @@ sub new {
   bless($self, $class);
   $self->read_config();
   $self->{ua} ||= LWP::UserAgent->new();
+  $self->{total_calls} = 0;
   return $self;
 }
 
@@ -142,6 +143,7 @@ sub call {
   # warn "Posting to ".($self->{uri} . $api)."\n";
   # warn "Content: ".encode_json($message)."\n";
   my $response = $self->{ua}->post($self->{uri} . $api, Content => encode_json($message));
+  $self->{total_calls}++;
   log_call($api, $message, $response);
   my $result = decode_json($response->content);
   croak join(": ", $result->{error}{code}, $result->{error}{message},
@@ -398,6 +400,22 @@ sub archaeology_search {
   return $result;
 }
 
+sub ores_for_search {
+    my $self = shift;
+    my $building_id = shift;
+
+    my $result = $self->call(archaeology => get_ores_available_for_processing => $building_id);
+    return $result;
+}
+
+sub get_glyphs {
+  my $self = shift;
+  my $building_id = shift;
+
+  my $result = $self->call(archaeology => get_glyphs => $building_id);
+  return $result;
+}
+
 sub port_all_ships {
   my $self = shift;
   my $building_id = shift;
@@ -425,6 +443,53 @@ sub port_all_ships {
   $result->{_invalid} = List::Util::min(time() + 3600, @completions);
   $self->write_json("cache/building/$building_id/view_all_ships", spaceport_view_all_ships => $result);
   return $result;
+}
+
+sub ships_for {
+    my $self = shift;
+    my $planet = shift;
+    my $target = shift;
+
+    my $result = $self->call(spaceport => get_ships_for => $planet, $target);
+    return $result;
+}
+
+sub send_ship {
+    my $self = shift;
+    my $ship = shift;
+    my $target = shift;
+
+    my $result = $self->call(spaceport => send_ship => $ship, $target);
+    return $result;
+}
+
+sub yard_queue {
+    my $self = shift;
+    my $building_id = shift;
+
+    my $result = $self->read_json("cache/building/$building_id/view_build_queue");
+    return $result if $result->{_invalid} > time();
+    my $page = 1;
+    my @ships;
+    my $result;
+    for (;;) {
+        $result = $self->call(shipyard => view_build_queue => $building_id, $page);
+        push(@ships, @{$result->{ships_building}});
+        last if @{$result->{ships_building}} < 25;
+        $page++;
+    }
+    $result->{ships_building} = [ @ships ];
+    my @completions;
+    for my $ship (@{$result->{ships_building}}) {
+        if ($ship->{date_completed}) {
+            my $available = parse_time($ship->{date_completed});
+            push(@completions, $available) if $available > time() + 30;
+        }
+        push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
+    }
+    $result->{_invalid} = List::Util::min(time() + 3600, @completions);
+    $self->write_json("cache/building/$building_id/view_build_queue", shipyard_view_build_queue => $result);
+    return $result;
 }
 
 sub trade_push {
