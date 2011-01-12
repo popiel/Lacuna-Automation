@@ -445,6 +445,27 @@ sub port_all_ships {
   return $result;
 }
 
+sub get_probed_stars {
+    my $self = shift;
+    my $building_id = shift;
+
+    my $result = $self->read_json("cache/building/$building_id/get_probed_stars");
+    return $result if $result->{_invalid} > time();
+    my $page = 1;
+    my @stars;
+    my $result;
+    for (;;) {
+        $result = $self->call(observatory => get_probed_stars => $building_id, $page);
+        push @stars, @{$result->{stars}};
+        last if @{$result->{stars}} < 25;
+        $page++;
+    }
+    $result->{stars} = \@stars;
+    $result->{_invalid} = time() + 3600;
+    $self->write_json("cache/building/$building_id/get_probed_stars", observatory_get_probed_stars => $result);
+    return $result;
+}
+
 sub ships_for {
     my $self = shift;
     my $planet = shift;
