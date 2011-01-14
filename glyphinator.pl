@@ -32,7 +32,7 @@ use feature ':5.10';
 
 use DBI;
 use FindBin;
-use List::Util qw(first min max sum);
+use List::Util qw(first min max sum reduce);
 use Date::Parse qw(str2time);
 use Math::Round qw(round);
 use Getopt::Long;
@@ -72,6 +72,7 @@ GetOptions(\%opts,
     # Excavator options
     'db=s',
     'send-excavators|send',
+    'rebuild',
 
     # make planet part of this too?
     'and'                     => $batch_opt_cb,
@@ -271,6 +272,7 @@ sub get_status {
 
         if ($status->{archlevel}{$planet_name} and $status->{archlevel}{$planet_name} >= 15) {
             my @shipyards = find_shipyards($buildings);
+            $status->{shipyards}{$planet_name} = \@shipyards;
             verbose("No shipyards on $planet_name\n") unless @shipyards;
             for my $yard (@shipyards) {
                 verbose("Found a shipyard on $planet_name\n");
@@ -297,6 +299,7 @@ sub get_status {
                     verbose(scalar @excavators_building . " excavators building at this yard\n");
                     push @{$status->{building}{$planet_name}}, @excavators_building;
                     $status->{not_building}{$planet_name} = 0;
+                    $yard->{last_finishes} = max(map { $_->{finished} } @excavators_building);
                 }
             }
         } else {
@@ -614,12 +617,23 @@ sub determine_ore {
 
 ## Excavators ##
 
+my %attack_ships;
+BEGIN {
+    %attack_ships = map { $_ => 1 } qw/
+        bleeder observatory_seeker spaceport_seeker
+        placebo placebo2 placebo3 placebo4 placebo5 placebo6
+        scow security_ministry_seeker
+        snark snark2 snark3 spy_pod spy_shuttle sweeper thud
+    /;
+}
 sub send_excavators {
     PLANET:
     for my $planet (grep { $status->{ready}{$_} } keys %{$status->{ready}}) {
         verbose("Prepping excavators on $planet\n");
         my $port = $status->{spaceports}{$planet};
         my $originally_docked = $status->{ready}{$planet};
+        my $warned_cant_verify;
+        my $launch_count;
 
         # During a dry-run, not actually updating the database results in
         # each excavator from each planet going to the same target.  Add
@@ -681,7 +695,7 @@ sub send_excavators {
                     }
 
                     unless (grep { $_->{type} eq 'excavator' } @{$ships->{available}}) {
-                        if (grep { $_->{reason}[0] eq '1010' } @{$ships->{unavailable}}) {
+                        if (grep { $_->{ship}{type} eq 'excavator' and $_->{reason}[0] eq '1010' } @{$ships->{unavailable}}) {
                             # This will set the "last_excavated" time to now, which is not
                             # the case, but it's as good as we have.  It means that some bodies
                             # might take longer to get re-dug but whatever, there are others
@@ -694,6 +708,35 @@ sub send_excavators {
 
                         $need_more++;
                         next;
+                    }
+
+                    # Check even harder to see if inhabited, if we want to avoid those
+                    unless ($batch->{'inhabited-ok'}) {
+                        my @avail_attack_ships   = grep { $attack_ships{$_->{type}} }
+                            @{$ships->{available}};
+                        my @unavail_attack_ships = grep { $attack_ships{$_->{ship}{type}} }
+                            @{$ships->{unavailable}};
+
+                        if (@avail_attack_ships) {
+                            output("$dest_name is an occupied planet, trying again...\n");
+                            mark_orbit_occupied($x, $y);
+                            $need_more++;
+                            next;
+                        } elsif(@unavail_attack_ships) {
+                            # 1013 - Can only be sent to inhabited planets (uninhabited planet)
+                            # 1009 - Can only be sent to planets and stars (asteroid)
+                            if (!grep { $_->{reason}[0] eq '1013' or $_->{reason}[0] eq '1009'}
+                                    @unavail_attack_ships) {
+                                output("$dest_name is an occupied planet, trying again...\n");
+                                mark_orbit_occupied($x, $y);
+                                $need_more++;
+                                next;
+                            }
+                        } else {
+                            unless ($warned_cant_verify++) {
+                                diag("$planet has no spy pods, scows, or attack ships, cannot verify if this planet is inhabited!\n");
+                            }
+                        }
                     }
 
                     $skip{$dest_name}++;
@@ -709,6 +752,7 @@ sub send_excavators {
                         my $launch_status = $client->send_ship($ex->{id}, {x => $x, y => $y});
 
                         if ($launch_status->{ship}->{date_arrives}) {
+                            $launch_count++;
                             push @{$status->{flying}},
                                 {
                                     planet      => $planet,
@@ -750,6 +794,39 @@ sub send_excavators {
         }
         delete $status->{ready}{$planet}
             if !$status->{ready}{$planet};
+
+        if ($launch_count and $opts{rebuild}) {
+            for (1..$launch_count) {
+                # Add an excavator to a shipyard if we can, to wherever the
+                # shortest build queue is
+
+                output("Building an excavator on $planet to replace one sent\n");
+
+                my $yard = reduce { $a->{last_finishes} < $b->{last_finishes} ? $a : $b }
+                    @{$status->{shipyards}{$planet}};
+
+                # Catch if this dies, we didnt actually confirm that we could build
+                # an excavator in this yard at this time.  Queue could be full, or
+                # we could be out of materials, etc.  This is probably cheaper than
+                # doing the get_buildable call before every single build.
+                my $ok = eval {
+                    my $build = $client->yard_build($yard, 'excavator');
+                    my $finish = time() + $build->{building}{work}{seconds_remaining};
+
+                    push @{$status->{building}{$planet}}, {
+                        finished => $finish,
+                    };
+                    $yard->{last_finishes} = $finish;
+                    $status->{not_building}{$planet} = 0;
+                    return 1;
+                };
+                unless ($ok) {
+                    my $e = $@;
+                    diag("Error rebuilding: $e\n");
+                }
+            }
+
+        }
     }
 }
 
@@ -883,6 +960,15 @@ sub mark_orbit_empty {
     }
 }
 
+sub mark_orbit_occupied {
+    my ($x, $y) = @_;
+
+    my $r = $star_db->do(q{update orbitals set empire_id = -1 where x = ? and y = ?}, {}, $x, $y);
+    unless ($r > 0) {
+        diag("Warning: could not update orbitals table for body at $x, $y!\n");
+    }
+}
+
 sub usage {
     diag(<<END);
 Usage: $0 [options]
@@ -918,6 +1004,7 @@ Options:
                            The information for these is selected from the star
                            database, and the database is updated to reflect your
                            new searches.
+  --rebuild              - Build a new excavator for each one sent
   --max-excavators <n>   - Send at most this number of excavators from any colony.
                            This argument can also be specified as a percentage,
                            eg '25%'

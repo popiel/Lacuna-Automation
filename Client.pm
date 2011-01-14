@@ -513,6 +513,15 @@ sub yard_queue {
     return $result;
 }
 
+sub yard_build {
+    my $self = shift;
+    my $building_id = shift;
+    my $type = shift;
+
+    my $result = $self->call(shipyard => build_ship => $building_id, $type);
+    return $result;
+}
+
 sub trade_push {
   my $self = shift;
   my $building_id = shift;
