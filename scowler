@@ -36,7 +36,7 @@ if ($body_name) {
 
 my $buildings = $client->body_buildings($body_id);
 my $status = $client->body_status($body_id);
-exit(0) if $status->{waste_stored} < $status->{waste_capacity} - 100000;
+exit(0) if $status->{waste_stored} < List::Util::max($status->{waste_capacity} * 3 / 4, $status->{waste_capacity} - 100000);
 $body_name = $status->{name};
 
 my $target = { star_id => $status->{star_id} };

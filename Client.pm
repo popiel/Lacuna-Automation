@@ -314,8 +314,8 @@ sub building_upgrade {
   my $url = shift;
   my $building_id = shift;
 
-  unlink("cache/building/$building_id/view");
   my $result = $self->call($url => upgrade => $building_id);
+  unlink("cache/building/$building_id/view") if $result;
   unlink("cache/body/$result->{status}{body}{id}/buildings") if $result;
   unlink("cache/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;
   return $result;
