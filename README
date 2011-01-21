@@ -13,6 +13,7 @@ activities
 show_planet [--body Name]
   Give a text representation of the status of one of your planets.
 
+
 build_queue [--body Name] [--queue Name]
   Try to build / upgrade something on one of your planets,
   based on a queue of desired builds.
@@ -51,6 +52,11 @@ exchange --body Colony --body Supplier [--ship NamePattern]
   as possible, keep it supplied with water and energy, and also cart away
   excess waste.  You must have ships parked at each planet, named to match
   the NamePattern (which defaults to the space-separated --body arguments).
+
+call api method args
+  Call an arbitrary api method.  A valid session_id will be inserted
+  as the first argument automatically; this will not work for methods
+  that do not accept the session_id (e.g. many empire creation methods).
 
 cron_target.template
   Sample wrapper script for build_queue, park_ranger, repairman, and trashman.
