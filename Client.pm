@@ -3,6 +3,9 @@ package Client;
 use strict;
 
 use Carp;
+use Exception::Class (
+    'LacunaRPCException' => { fields => ['code', 'text', 'data'] }
+);
 use File::Path;
 use File::Spec;
 use JSON::XS;
@@ -146,8 +149,8 @@ sub call {
   $self->{total_calls}++;
   log_call($api, $message, $response);
   my $result = decode_json($response->content);
-  croak join(": ", $result->{error}{code}, $result->{error}{message},
-             JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}))
+  LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
+                            data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}))
     if $result->{error};
   croak "Call failed: ".($response->status_line) unless $response->is_success;
   croak "Call response without result" unless $result->{result};
