@@ -521,6 +521,27 @@ sub yard_queue {
     return $result;
 }
 
+sub yard_buildable {
+  my $self = shift;
+  my $yard_id = shift;
+
+  my $result = $self->read_json("cache/$self->{empire_name}/yard/$yard_id/buildable");
+  return $result if $result->{_invalid} > time();
+  my $result = $self->call(shipyard => get_buildable => $yard_id);
+
+  # Building completions can affect shipyard builds
+  my $buildings = $self->body_buildings($body_id);
+  my @completions;
+  for my $building (values(%{$buildings->{buildings}})) {
+    next unless $building->{pending_build};
+    push(@completions, parse_time($building->{pending_build}{end}));
+  }
+
+  $result->{_invalid} = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
+  $self->write_json("cache/$self->{empire_name}/yard/$yard_id/buildable", buildable => $result);
+  return $result;
+}
+
 sub yard_build {
     my $self = shift;
     my $building_id = shift;
