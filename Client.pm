@@ -148,7 +148,12 @@ sub call {
   my $response = $self->{ua}->post($self->{uri} . $api, Content => encode_json($message));
   $self->{total_calls}++;
   log_call($api, $message, $response);
-  my $result = decode_json($response->content);
+  my $result;
+  eval { $result = decode_json($response->content); };
+  if (!$result && $@ =~ /^malformed/) {
+    print $response->content;
+    die $@;
+  }
   LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
                             data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}))
     if $result->{error};
