@@ -36,14 +36,23 @@ if ($body_name) {
 
 my $buildings = $client->body_buildings($body_id);
 my $status = $client->body_status($body_id);
-exit(0) if $status->{waste_stored} < List::Util::max($status->{waste_capacity} * 3 / 4, $status->{waste_capacity} - 100000);
 $body_name = $status->{name};
+emit("Waste stored: $status->{waste_stored}") if $debug;
+exit(0) if $status->{waste_stored} < List::Util::max($status->{waste_capacity} * 3 / 4, $status->{waste_capacity} - 100000);
 
 my $target = { star_id => $status->{star_id} };
 
 my $ships = $client->call(spaceport => get_ships_for => $body_id, $target);
 
+if ($debug) {
+  emit("Ship count: ".scalar(@{$ships->{available}}));
+  for my $ship (@{$ships->{available}}) {
+    emit("$ship->{id}: $ship->{type} $ship->{task}");
+  }
+}
+
 my $scow = (grep($_->{type} eq "scow" && $_->{task} eq "Docked", @{$ships->{available}}))[0];
+emit("Using ship: $scow->{id}") if $debug;
 
 exit(0) unless $scow;
 
