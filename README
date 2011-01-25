@@ -13,7 +13,6 @@ activities
 show_planet [--body Name]
   Give a text representation of the status of one of your planets.
 
-
 build_queue [--body Name] [--queue Name]
   Try to build / upgrade something on one of your planets,
   based on a queue of desired builds.
@@ -21,6 +20,21 @@ build_queue [--body Name] [--queue Name]
   It doesn't do any real locking, though, and it outputs to stdout and stderr,
   so you probably want to put it in a wrapper script.
   Look at the sample build queue template for an idea of how to format the build queue.
+
+  Commands:
+  build <building name>
+    Build a new building at a random place on the map.
+
+  upgrade <level> <building name>
+    Upgrade a building of a particular level.
+    If level is given as 0, then any level will match.
+    If multiple buildings match, then one is chosen arbitrarily.
+
+  wait <timestamp>
+    Wait until a particular time.
+
+  Additional options:
+  Prefix a queue entry with ! to make it non-skippable.
 
 park_ranger [--body Name]
   Try to throw parties in all parks on the planet.
