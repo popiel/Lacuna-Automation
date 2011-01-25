@@ -530,6 +530,7 @@ sub yard_buildable {
   my $result = $self->call(shipyard => get_buildable => $yard_id);
 
   # Building completions can affect shipyard builds
+  my $body_id = $result->{status}{body}{id};
   my $buildings = $self->body_buildings($body_id);
   my @completions;
   for my $building (values(%{$buildings->{buildings}})) {
