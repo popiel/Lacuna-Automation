@@ -3,6 +3,9 @@ package Client;
 use strict;
 
 use Carp;
+use Exception::Class (
+    'LacunaRPCException' => { fields => ['code', 'text', 'data'] }
+);
 use File::Path;
 use File::Spec;
 use JSON::XS;
@@ -145,9 +148,14 @@ sub call {
   my $response = $self->{ua}->post($self->{uri} . $api, Content => encode_json($message));
   $self->{total_calls}++;
   log_call($api, $message, $response);
-  my $result = decode_json($response->content);
-  croak join(": ", $result->{error}{code}, $result->{error}{message},
-             JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}))
+  my $result;
+  eval { $result = decode_json($response->content); };
+  if (!$result && $@ =~ /^malformed/) {
+    print $response->content;
+    die $@;
+  }
+  LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
+                            data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}))
     if $result->{error};
   croak "Call failed: ".($response->status_line) unless $response->is_success;
   croak "Call response without result" unless $result->{result};
@@ -401,11 +409,11 @@ sub archaeology_search {
 }
 
 sub ores_for_search {
-    my $self = shift;
-    my $building_id = shift;
+  my $self = shift;
+  my $building_id = shift;
 
-    my $result = $self->call(archaeology => get_ores_available_for_processing => $building_id);
-    return $result;
+  my $result = $self->call(archaeology => get_ores_available_for_processing => $building_id);
+  return $result;
 }
 
 sub get_glyphs {
@@ -445,78 +453,100 @@ sub port_all_ships {
 }
 
 sub get_probed_stars {
-    my $self = shift;
-    my $building_id = shift;
+  my $self = shift;
+  my $building_id = shift;
 
-    my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/get_probed_stars");
-    return $result if $result->{_invalid} > time();
-    my $page = 1;
-    my @stars;
-    for (;;) {
-        $result = $self->call(observatory => get_probed_stars => $building_id, $page);
-        push @stars, @{$result->{stars}};
-        last if @{$result->{stars}} < 25;
-        $page++;
-    }
-    $result->{stars} = \@stars;
-    $result->{_invalid} = time() + 3600;
-    $self->write_json("cache/$self->{empire_name}/building/$building_id/get_probed_stars", observatory_get_probed_stars => $result);
-    return $result;
+  my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/get_probed_stars");
+  return $result if $result->{_invalid} > time();
+  my $page = 1;
+  my @stars;
+  for (;;) {
+    $result = $self->call(observatory => get_probed_stars => $building_id, $page);
+    push @stars, @{$result->{stars}};
+    last if @{$result->{stars}} < 25;
+    $page++;
+  }
+  $result->{stars} = \@stars;
+  $result->{_invalid} = time() + 3600;
+  $self->write_json("cache/$self->{empire_name}/building/$building_id/get_probed_stars", observatory_get_probed_stars => $result);
+  return $result;
 }
 
 sub ships_for {
-    my $self = shift;
-    my $planet = shift;
-    my $target = shift;
+  my $self = shift;
+  my $planet = shift;
+  my $target = shift;
 
-    my $result = $self->call(spaceport => get_ships_for => $planet, $target);
-    return $result;
+  my $result = $self->call(spaceport => get_ships_for => $planet, $target);
+  return $result;
 }
 
 sub send_ship {
-    my $self = shift;
-    my $ship = shift;
-    my $target = shift;
+  my $self = shift;
+  my $ship = shift;
+  my $target = shift;
 
-    my $result = $self->call(spaceport => send_ship => $ship, $target);
-    return $result;
+  my $result = $self->call(spaceport => send_ship => $ship, $target);
+  return $result;
 }
 
 sub yard_queue {
-    my $self = shift;
-    my $building_id = shift;
+  my $self = shift;
+  my $building_id = shift;
 
-    my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/view_build_queue");
-    return $result if $result->{_invalid} > time();
-    my $page = 1;
-    my @ships;
-    for (;;) {
-        $result = $self->call(shipyard => view_build_queue => $building_id, $page);
-        push(@ships, @{$result->{ships_building}});
-        last if @{$result->{ships_building}} < 25;
-        $page++;
+  my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/view_build_queue");
+  return $result if $result->{_invalid} > time();
+  my $page = 1;
+  my @ships;
+  for (;;) {
+    $result = $self->call(shipyard => view_build_queue => $building_id, $page);
+    push(@ships, @{$result->{ships_building}});
+    last if @{$result->{ships_building}} < 25;
+    $page++;
+  }
+  $result->{ships_building} = [ @ships ];
+  my @completions;
+  for my $ship (@{$result->{ships_building}}) {
+    if ($ship->{date_completed}) {
+      my $available = parse_time($ship->{date_completed});
+      push(@completions, $available) if $available > time() + 30;
     }
-    $result->{ships_building} = [ @ships ];
-    my @completions;
-    for my $ship (@{$result->{ships_building}}) {
-        if ($ship->{date_completed}) {
-            my $available = parse_time($ship->{date_completed});
-            push(@completions, $available) if $available > time() + 30;
-        }
-        push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
-    }
-    $result->{_invalid} = List::Util::min(time() + 3600, @completions);
-    $self->write_json("cache/$self->{empire_name}/building/$building_id/view_build_queue", shipyard_view_build_queue => $result);
-    return $result;
+    push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
+  }
+  $result->{_invalid} = List::Util::min(time() + 3600, @completions);
+  $self->write_json("cache/$self->{empire_name}/building/$building_id/view_build_queue", shipyard_view_build_queue => $result);
+  return $result;
+}
+
+sub yard_buildable {
+  my $self = shift;
+  my $yard_id = shift;
+
+  my $result = $self->read_json("cache/$self->{empire_name}/building/$yard_id/buildable");
+  return $result if $result->{_invalid} > time();
+  my $result = $self->call(shipyard => get_buildable => $yard_id);
+
+  # Building completions can affect shipyard builds
+  my $body_id = $result->{status}{body}{id};
+  my $buildings = $self->body_buildings($body_id);
+  my @completions;
+  for my $building (values(%{$buildings->{buildings}})) {
+    next unless $building->{pending_build};
+    push(@completions, parse_time($building->{pending_build}{end}));
+  }
+
+  $result->{_invalid} = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
+  $self->write_json("cache/$self->{empire_name}/building/$yard_id/buildable", buildable => $result);
+  return $result;
 }
 
 sub yard_build {
-    my $self = shift;
-    my $building_id = shift;
-    my $type = shift;
+  my $self = shift;
+  my $building_id = shift;
+  my $type = shift;
 
-    my $result = $self->call(shipyard => build_ship => $building_id, $type);
-    return $result;
+  my $result = $self->call(shipyard => build_ship => $building_id, $type);
+  return $result;
 }
 
 sub trade_push {

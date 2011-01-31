@@ -4,6 +4,7 @@ use strict;
 
 use Carp;
 use Client;
+use Date::Manip;
 use Getopt::Long;
 use IO::Handle;
 use JSON::XS;
@@ -53,10 +54,29 @@ my @queue = (<$file>);
 close $file;
 
 my $buildable;
+my $abort;
 for my $j ($[..$#queue) {
+  exit(0) if $abort;
   my $command = $queue[$j];
   chomp $command;
+  $abort = 1 if $command =~ s/^\!//;
+
   print "Inspecting $command\n" if $debug;
+  if ($command =~ /^wait *(quietly)? *(.*)/) {
+    my ($quiet, $until) = ($1, $2);
+    my $date = ParseDate($until);
+    if (!$quiet) {
+      emit("Waiting until ".UnixDate($date, "%Y-%m-%d %H:%M"));
+      splice(@queue, $j, 1, "wait quietly $until");
+      write_queue();
+    }
+    if (UnixDate($date, "%s") < time()) {
+      splice(@queue, $j, 1);
+      write_queue();
+    } else {
+      exit(0);
+    }
+  }
   if ($command =~ /^build (.*)/o) {
     my $name = $1;
     $buildable ||= $client->body_buildable($body_id);
@@ -67,7 +87,7 @@ for my $j ($[..$#queue) {
     }
     my $build = $client->body_build($body_id, $name);
     if ($build) {
-        emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
+      emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
       splice(@queue, $j, 1);
       write_queue();
       exit(0);

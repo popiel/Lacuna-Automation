@@ -73,6 +73,7 @@ GetOptions(\%opts,
     'db=s',
     'send-excavators|send',
     'rebuild',
+    'fill:i',
 
     # make planet part of this too?
     'and'                     => $batch_opt_cb,
@@ -84,12 +85,11 @@ GetOptions(\%opts,
     'inhabited-ok'            => $batch_opt_cb,
     'furthest-first|furthest' => $batch_opt_cb,
     'random-dist|random'      => $batch_opt_cb,
-    #   - alter 'dist' by a random % of the search range
-    #   - but how to deal with multiple search windows?  just the closest
-    #     window is probably not ok
     'find-destinations=i',
 
-    # Build moar?  how to do that and not be too aggressive?
+    # Allow this to run in an infinate glyph-sucking loop.  Value is
+    # minutes between cycles (default 360)
+    'continuous:i',
 ) or usage();
 push @batches, {} unless @batches;
 
@@ -142,12 +142,27 @@ if ($star_db) {
     }
 }
 
+my $finished;
 my $status;
-get_status();
-do_digs() if $opts{'do-digs'};
-send_excavators() if $opts{'send-excavators'} and $star_db;
-report_status();
-output("$client->{total_calls} api calls made.\n");
+while (!$finished) {
+    output("Starting up at " . localtime() . "\n");
+    get_status();
+    do_digs() if $opts{'do-digs'};
+    send_excavators() if $opts{'send-excavators'} and $star_db;
+    report_status();
+
+    # Clear cache before sleeping
+    $status = {};
+
+    if (defined $opts{continuous}) {
+        my $sleep = $opts{continuous} || 360;
+        output("Sleeping for $sleep minutes...\n");
+        $sleep *= 60; # minutes to seconds
+        sleep $sleep;
+    } else {
+        $finished = 1;
+    }
+}
 
 exit 0;
 
@@ -181,7 +196,7 @@ sub get_status {
                     next;
                 }
 
-                my $count = $batch->{'max-excavators'} || $remain;
+                my $count = $batch->{'max-excavators'} // $remain;
                 if ($count =~ /^(\d+)%/) {
                     $count = max(int(($1 / 100) * $opts{'find-destinations'}), 1);
                 }
@@ -506,7 +521,7 @@ sub find_arch_min {
     my $arch_id = first {
             $buildings->{$_}->{name} eq 'Archaeology Ministry'
     }
-    grep { $buildings->{$_}->{level} > 0 }
+    grep { $buildings->{$_}->{level} > 0 and $buildings->{$_}->{efficiency} == 100 }
     keys %$buildings;
 
     return if not $arch_id;
@@ -523,7 +538,7 @@ sub find_shipyards {
     my @yard_ids = grep {
             $buildings->{$_}->{name} eq 'Shipyard'
     }
-    grep { $buildings->{$_}->{level} > 0 }
+    grep { $buildings->{$_}->{level} > 0 and $buildings->{$_}->{efficiency} == 100 }
     keys %$buildings;
 
     return if not @yard_ids;
@@ -537,7 +552,7 @@ sub find_spaceport {
     my $port_id = first {
             $buildings->{$_}->{name} eq 'Space Port'
     }
-    grep { $buildings->{$_}->{level} > 0 }
+    grep { $buildings->{$_}->{level} > 0 and $buildings->{$_}->{efficiency} == 100 }
     keys %$buildings;
 
     return if not $port_id;
@@ -645,16 +660,17 @@ sub send_excavators {
         # them to an exclude list to simulate them being actually used.
         my %skip;
 
+        BATCH:
         for my $batch (@batches) {
             my $docked = $status->{ready}{$planet};
 
             if ($docked == 0) {
                 diag("Ran out of excavators before batches were complete!\n");
                 delete $status->{ready}{$planet};
-                next PLANET;
+                last BATCH;
             }
 
-            my $count = $batch->{'max-excavators'} || $docked;
+            my $count = $batch->{'max-excavators'} // $docked;
             if ($count =~ /^(\d+)%/) {
                 $count = max(int(($1 / 100) * $originally_docked), 1);
             }
@@ -708,7 +724,7 @@ sub send_excavators {
                             update_last_sent($x, $y);
                         } else {
                             diag("Unknown error sending excavator from $planet to $dest_name!\n");
-                            next PLANET;
+                            last BATCH;
                         }
 
                         $need_more++;
@@ -797,32 +813,74 @@ sub send_excavators {
                 }
             }
         }
+
         delete $status->{ready}{$planet}
             if !$status->{ready}{$planet};
 
+        my $build = 0;
         if ($launch_count and $opts{rebuild}) {
-            for (1..$launch_count) {
+            $build = $launch_count;
+        }
+        if (defined $opts{fill}) {
+            # Compute how many we would need to build
+
+            my $need = 0;
+            my $minutes = $opts{fill} || $opts{continuous} || 360;
+            for my $yard (@{$status->{shipyards}{$planet} || []}) {
+
+                # Get the length of a build here
+                my $buildable = $client->yard_buildable($yard->{yard});
+                my ($build_time) = map { $buildable->{buildable}{$_}{cost}{seconds} }
+                    grep { $_ eq 'excavator' }
+                    keys %{$buildable->{buildable}};
+                verbose("An excavator will take $build_time seconds in this yard\n");
+
+                # Figure out how much time we'd need to fill in for
+                my $finishes = $yard->{last_finishes} || time();
+                my $target_finish = time() + ($minutes * 60);
+                my $delta = $target_finish - $finishes;
+                verbose("$delta seconds of build needed to fill up shipyard to $minutes minutes\n");
+
+                if ($delta > 0) {
+                    my $new = int($delta / $build_time) + ($delta % $build_time ? 1 : 0);
+                    verbose("Need $new additional excavators\n");
+                    $need += $new;
+                }
+            }
+
+            verbose("Would need $need ships to fill up to $minutes minutes on $planet\n");
+
+            # make whichever is higher, the number calculated here, or from --rebuild
+            $build = max($build, $need);
+        }
+
+        if ($build) {
+            for (1..$build) {
                 # Add an excavator to a shipyard if we can, to wherever the
                 # shortest build queue is
 
-                output("Building an excavator on $planet to replace one sent\n");
-
                 my $yard = reduce { $a->{last_finishes} < $b->{last_finishes} ? $a : $b }
-                    @{$status->{shipyards}{$planet}};
+                    @{$status->{shipyards}{$planet} || []};
 
                 # Catch if this dies, we didnt actually confirm that we could build
                 # an excavator in this yard at this time.  Queue could be full, or
                 # we could be out of materials, etc.  This is probably cheaper than
                 # doing the get_buildable call before every single build.
                 my $ok = eval {
-                    my $build = $client->yard_build($yard->{yard}, 'excavator');
-                    my $finish = time() + $build->{building}{work}{seconds_remaining};
+                    if ($opts{'dry-run'}) {
+                        output("Would have built an excavator on $planet\n");
+                    } else {
+                        output("Building an excavator on $planet to replace one sent\n");
 
-                    push @{$status->{building}{$planet}}, {
-                        finished => $finish,
-                    };
-                    $yard->{last_finishes} = $finish;
-                    $status->{not_building}{$planet} = 0;
+                        my $build = $client->yard_build($yard->{yard}, 'excavator');
+                        my $finish = time() + $build->{building}{work}{seconds_remaining};
+
+                        push @{$status->{building}{$planet}}, {
+                            finished => $finish,
+                        };
+                        $yard->{last_finishes} = $finish;
+                        $status->{not_building}{$planet} = 0;
+                    }
                     return 1;
                 };
                 unless ($ok) {
@@ -851,7 +909,7 @@ sub pick_destination {
     my $max_squared = $max_dist * $max_dist;
     my $min_squared = $min_dist * $min_dist;
 
-    my $count       = $args{count} || 1;
+    my $count       = $args{count} // 1;
     my $current_min = $box_max;
     my $current_max = $box_min;
     my $skip        = $args{skip} || [];
@@ -862,7 +920,13 @@ sub pick_destination {
 
     my @results;
     while (@results < $count and ($furthest ? $current_min > 0 : $current_max < $box_max)) {
-        if ($furthest) {
+        if ($batch->{'random-dist'}) {
+            # Use full range for random searches
+            $current_min = $box_min;
+            $current_max = $box_max;
+            verbose("Setting to full range for random search\n");
+        }
+        elsif ($furthest) {
             $current_max = $current_min;
             $current_min -= 100;
             $current_min = 0 if $current_min < 0;
@@ -885,7 +949,7 @@ sub pick_destination {
         my $inhabited = $batch->{'inhabited-ok'} ? '' : q{and o.empire_id is null};
         my $zone      = $batch->{'zone'} ? 'and zone = ?' : '';
         my $order     = $batch->{'furthest-first'} ? 'desc' : 'asc';
-        my $rand      = $batch->{'random-dist'} ? "+ ((random()) % 50000)" : '';
+        my $rand      = $batch->{'random-dist'} ? "+ random()" : '';
         my $find_dest = $star_db->prepare(<<SQL);
 select   s.name, o.orbit, o.x, o.y, s.zone, (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?) as dist,
          (((o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)) $rand) as sort_dist
@@ -999,6 +1063,10 @@ Options:
                            passed multiple times to indicate several planets.
                            If this is not specified, all relevant colonies will
                            be inspected.
+  --continuous [<min>]   - Run the program in a continuous loop until interrupted.
+                           If an argument is supplied, it should be the number of
+                           minutes to sleep between runs.  If unspecified, this is
+                           360 (6 hours).
   --do-digs              - Begin archaeology digs on any planets which are idle.
   --min-ore <amount>     - Do not begin digs with less ore in reserve than this
                            amount.  The default is 10,000.
@@ -1010,6 +1078,10 @@ Options:
                            database, and the database is updated to reflect your
                            new searches.
   --rebuild              - Build a new excavator for each one sent
+  --fill [<minutes>]     - Fill all shipyards with the minimum number of excavators
+                           that will take at least <minutes> (default 360) to
+                           complete.  If --continuous is specified, it will use that
+                           value if not overridden here before defaulting to 360.
   --max-excavators <n>   - Send at most this number of excavators from any colony.
                            This argument can also be specified as a percentage,
                            eg '25%'
