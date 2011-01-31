@@ -217,7 +217,7 @@ sub empire_status {
 
   my $result = $self->read_json("cache/$self->{empire_name}/empire/status");
   return $result if $result->{_time} >= time() - 610;
-  my $result = $self->call(empire => login => $self->{empire_name}, $self->{empire_password}, $self->{api_key});
+  $result = $self->call(empire => login => $self->{empire_name}, $self->{empire_password}, $self->{api_key});
   return $result->{status}{empire} if $result->{status}{empire};
   croak "Couldn't get empire status";
 }
@@ -228,7 +228,7 @@ sub body_status {
 
   my $result = $self->read_json("cache/$self->{empire_name}/body/$body_id/status");
   return $result if $result->{_time} >= time() - 500 && $result->{_invalid} > time();
-  my $result = $self->body_buildings($body_id);
+  $result = $self->body_buildings($body_id);
   return $result->{status}{body} if $result->{status}{body};
   croak "Couldn't get body status";
 }
@@ -239,7 +239,7 @@ sub body_buildings {
 
   my $result = $self->read_json("cache/$self->{empire_name}/body/$body_id/buildings");
   return $result if $result->{_invalid} > time();
-  my $result = $self->call(body => get_buildings => $body_id);
+  $result = $self->call(body => get_buildings => $body_id);
   my @completions;
   for my $building (values(%{$result->{buildings}})) {
     push(@completions, parse_time($building->{pending_build}{end})) if $building->{pending_build};
@@ -256,7 +256,7 @@ sub body_buildable {
 
   my $result = $self->read_json("cache/$self->{empire_name}/body/$body_id/buildable");
   return $result if $result->{_invalid} > time();
-  my $result = $self->call(body => get_buildable => $body_id);
+  $result = $self->call(body => get_buildable => $body_id);
   my $buildings = $self->body_buildings($body_id);
   my @completions;
   for my $building (values(%{$buildings->{buildings}})) {
@@ -341,7 +341,7 @@ sub building_view {
 
   my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/view");
   return $result if $result->{_invalid} > time();
-  my $result = $self->call($url, view => $building_id);
+  $result = $self->call($url, view => $building_id);
   my @completions;
   for my $building ($result->{building}) {
     push(@completions, parse_time($building->{pending_build}{end})) if $building->{pending_build};
@@ -361,7 +361,7 @@ sub building_stats_for_level {
 
   my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/stats_$level");
   return $result if $result;
-  my $result = $self->call($url, get_stats_for_level => $building_id, $level);
+  $result = $self->call($url, get_stats_for_level => $building_id, $level);
   $self->write_json("cache/$self->{empire_name}/building/$building_id/stats_$level", building_stats => $result);
   return $result;
 }
@@ -424,7 +424,6 @@ sub port_all_ships {
   return $result if $result->{_invalid} > time();
   my $page = 1;
   my @ships;
-  my $result;
   for (;;) {
     $result = $self->call(spaceport => view_all_ships => $building_id, $page);
     push(@ships, @{$result->{ships}});
@@ -453,7 +452,6 @@ sub get_probed_stars {
     return $result if $result->{_invalid} > time();
     my $page = 1;
     my @stars;
-    my $result;
     for (;;) {
         $result = $self->call(observatory => get_probed_stars => $building_id, $page);
         push @stars, @{$result->{stars}};
@@ -492,7 +490,6 @@ sub yard_queue {
     return $result if $result->{_invalid} > time();
     my $page = 1;
     my @ships;
-    my $result;
     for (;;) {
         $result = $self->call(shipyard => view_build_queue => $building_id, $page);
         push(@ships, @{$result->{ships_building}});
