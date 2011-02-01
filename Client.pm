@@ -524,7 +524,7 @@ sub yard_buildable {
 
   my $result = $self->read_json("cache/$self->{empire_name}/building/$yard_id/buildable");
   return $result if $result->{_invalid} > time();
-  my $result = $self->call(shipyard => get_buildable => $yard_id);
+  $result = $self->call(shipyard => get_buildable => $yard_id);
 
   # Building completions can affect shipyard builds
   my $body_id = $result->{status}{body}{id};
