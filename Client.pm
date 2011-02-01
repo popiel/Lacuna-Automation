@@ -432,7 +432,6 @@ sub port_all_ships {
   return $result if $result->{_invalid} > time();
   my $page = 1;
   my @ships;
-  my $result;
   for (;;) {
     $result = $self->call(spaceport => view_all_ships => $building_id, $page);
     push(@ships, @{$result->{ships}});
@@ -461,7 +460,6 @@ sub get_probed_stars {
   return $result if $result->{_invalid} > time();
   my $page = 1;
   my @stars;
-  my $result;
   for (;;) {
     $result = $self->call(observatory => get_probed_stars => $building_id, $page);
     push @stars, @{$result->{stars}};
@@ -500,7 +498,6 @@ sub yard_queue {
   return $result if $result->{_invalid} > time();
   my $page = 1;
   my @ships;
-  my $result;
   for (;;) {
     $result = $self->call(shipyard => view_build_queue => $building_id, $page);
     push(@ships, @{$result->{ships_building}});
@@ -527,7 +524,7 @@ sub yard_buildable {
 
   my $result = $self->read_json("cache/$self->{empire_name}/building/$yard_id/buildable");
   return $result if $result->{_invalid} > time();
-  my $result = $self->call(shipyard => get_buildable => $yard_id);
+  $result = $self->call(shipyard => get_buildable => $yard_id);
 
   # Building completions can affect shipyard builds
   my $body_id = $result->{status}{body}{id};
