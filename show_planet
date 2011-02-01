@@ -54,6 +54,8 @@ my @foods = (
   "Cheese Maker",              # 3
   "Algae Pond",
   "Malcud Field",
+  "Beeldeban Nest",
+  "Lapis Forest",
 );
 
 my $build_end;
