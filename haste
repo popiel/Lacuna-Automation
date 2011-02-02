@@ -104,8 +104,13 @@ do {
             output("$hours_full hours until waste is full");
 
             if ( $opts{'max-percent'} ) {
-                verbose("Attempting to keep keep waste under $opts{'max-percent'}");
-                waste_disposal( $s );
+                verbose(
+                    sprintf(
+                        'Attempting to keep keep waste under %f%% (%d) units',
+                        $opts{'max-percent'} * 100, $maximum_waste
+                    )
+                );
+                waste_disposal( $s, $maximum_waste );
             }
         }
         else {
@@ -196,8 +201,26 @@ sub dump_resource {
 }
 
 sub waste_disposal {
-    my ($s) = @_;
-    warn "Waste disposal not implemented yet\n";
+    my ($s, $amount) = @_;
+
+    my $dumped   = scow_dump( $s, $amount );
+    output("Shipped off $dumped units of waste via scow");
+
+    my $recycled = recycle( $s, ($amount - $dumped) );
+    if (keys %$recycled) {
+        output(
+            sprintf(
+                "Recycled %d units of waste into %s",
+                sum( values %$recycled ),
+                join('; ', map { "$_: $recycled->{$_}" } keys %$recycled ),
+            )
+        );
+    }
+    else {
+        output("Could not recycle waste into resources");
+    }
+
+    unlink("cache/codon/body/$s->{id}/status");
 }
 
 sub proportionalize {
@@ -251,41 +274,76 @@ sub output {
     print @_,"\n";
 }
 
-__END__
+sub scow_dump {
+    my ($s, $amount) = @_;
+    my $dumped = 0;
 
+    my $target = { star_id => $s->{star_id} };
+    my $ships = $client->call(spaceport => get_ships_for => $s->{id}, $target);
 
-        my $body_buildings = $client->body_buildings($s->{id});
-
-        # Start by determining how much we waste we want to generate
-        my $dump_total = $s->{'waste_hour'} * $limit;
-
-        my %seen;
-        my @storage_facilities =
-            sort { $b->{"$b->{type}_percent"} <=> $a->{"$a->{type}_percent"} }
-            map  { +{ %{ $body_buildings->{$_} }, id => $_ }        }
-            grep {
-                my ($type) = map lc, $body_buildings->{$_}{name} =~ /^(\w+) Storage|Reserve/;
-                ( $type && !$seen{$type} ) # yes, this is sneaking a new key into items we want
-                    ? ($seen{$type},$body_buildings->{$_}{type}) = (1,$type)
-                    : 0
-            }
-            keys %$body_buildings;
-
-        for my $facility ( @storage_facilities ) {
-            given ($facility->{type}) {
-                when ('energy') {
-                    output("Dump $dump_amount{$facility->{type}} units of energy");
-                    $client->call('energyreserve','dump',$dump_amount{ $facility->{type} }) unless $opts{'dry-run'};
-                }
-                when ('water') {
-                    $client->call('waterstorage','dump',$dump_amount{ $facility->{type} }) unless $opts{'dry-run'};
-                }
-                when ('food') {
-                    dump_food( $facility, $dump_amount{ $facility->{type} } );
-                }
-                when ('ore') {
-                    dump_ore( $facility, $dump_amount{ $facility->{type} } );
-                }
-            }
+    if ($opts{verbose}) {
+        verbose("Ship count: ".scalar(@{$ships->{available}}));
+        for my $ship (@{$ships->{available}}) {
+            verbose("$ship->{id}: $ship->{type} $ship->{task} $ship->{hold_size}");
         }
     }
+
+    for my $scow (
+        sort { $b->{hold_size} <=> $a->{hold_size}            }
+        grep { $_->{type} eq "scow" && $_->{task} eq "Docked" }
+        @{$ships->{available}}
+    ) {
+        my $result = $client->call(spaceport => send_ship => $scow->{id}, $target) unless $opts{'dry-run'};
+        output("Sent scow '$scow->{name}' ($scow->{hold_size} waste) to $s->{star_name}");
+        $dumped += $scow->{hold_size};
+        last if ($dumped >= $amount);
+    }
+
+    if ( $dumped == 0 ) {
+        output( "Nothing dumped via scows. Do you have any scows available?" );
+    }
+
+    return $dumped;
+}
+
+sub recycle {
+    my ($s, $amount) = @_;
+    my %recycled;
+
+    my $buildings = $client->body_buildings($s->{id})->{'buildings'};
+    my @buildings = map  { +{ %{ $buildings->{$_} }, id => $_ } } keys(%$buildings);
+    my @centers   =
+        sort { $b->{level} <=> $a->{level} }
+        grep { $_->{name} eq "Waste Recycling Center" }
+        @buildings;
+
+    for my $center (@centers) {
+        next if $center->{work};
+        my $view = $client->building_view($center->{url}, $center->{id});
+        my $waste = List::Util::min(
+            ((($opts{interval}||10)*60) - 30) / $view->{recycle}{seconds_per_resource},
+            $client->body_status($s->{id})->{'waste_stored'});
+        verbose("looking to recycle $waste units of waste into new resources");
+
+        my %res;
+        my $sum = 0;
+        for my $res (qw(ore water energy)) {
+            $res{$res} =
+                $client->body_status($s->{id})->{"${res}_capacity"} -
+                $client->body_status($s->{id})->{"${res}_stored"}   + 1;
+            $sum += $res{$res};
+            verbose("we can hold $res{$res} more units of $res");
+        }
+
+        for my $res (qw(ore water energy)) {
+            $recycled{$res} = int($res{$res} * $waste / $sum);
+            verbose("we want to make $res{$res} units of $res");
+            $client->body_status($s->{id})->{"${res}_stored"} -= $recycled{$res};
+        }
+
+        $client->recycle_recycle($center->{id}, $recycled{water}, $recycled{ore}, $recycled{energy})
+            unless $opts{'dry-run'};
+        output("Recycled for $recycled{ore} ore, $recycled{water} water, and $recycled{energy} energy.");
+    }
+    return \%recycled;
+}
