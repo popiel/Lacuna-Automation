@@ -101,7 +101,7 @@ do {
             my $hours_full = sprintf('%0.2f',
                 ( $s->{waste_capacity} - $s->{waste_stored} ) / $s->{waste_hour}
             );
-            output("$hours_full hours until waste is full");
+            output("$hours_full hours until waste is full; currently at $s->{waste_stored} units");
 
             if ( $opts{'max-percent'} ) {
                 verbose(
@@ -309,12 +309,12 @@ sub proportionalize {
 
 sub verbose {
     return unless $opts{verbose};
-    print @_,"\n";
+    output(' -- ',@_);
 }
 
 sub output {
     return if $opts{quiet};
-    print @_,"\n";
+    print scalar(localtime),': ',@_,"\n";
 }
 
 sub scow_dump {
@@ -339,11 +339,15 @@ sub scow_dump {
         my $result = $client->call(spaceport => send_ship => $scow->{id}, $target) unless $opts{'dry-run'};
         output("Sent scow '$scow->{name}' ($scow->{hold_size} waste) to $s->{star_name}");
         $dumped += $scow->{hold_size};
+        verbose("dupmed $dumped of $amount so far");
         last if ($dumped >= $amount);
     }
 
     if ( $dumped == 0 ) {
         output( "Nothing dumped via scows. Do you have any scows available?" );
+    }
+    else {
+        output( "Dumped a total of $dumped via scows" );
     }
 
     return $dumped;
@@ -353,6 +357,7 @@ sub recycle {
     my ($s, $amount) = @_;
     my %recycled;
 
+    output( "Looking to recycle $amount of waste int new resources" );
     my $buildings = $client->body_buildings($s->{id})->{'buildings'};
     my @buildings = map  { +{ %{ $buildings->{$_} }, id => $_ } } keys(%$buildings);
     my @centers   =
@@ -363,10 +368,10 @@ sub recycle {
     for my $center (@centers) {
         next if $center->{work};
         my $view = $client->building_view($center->{url}, $center->{id});
-        my $waste = List::Util::min(
+        my $waste = int List::Util::min(
             ((($opts{interval}||10)*60) - 30) / $view->{recycle}{seconds_per_resource},
             $client->body_status($s->{id})->{'waste_stored'});
-        verbose("looking to recycle $waste units of waste into new resources");
+        verbose("recycling $waste units of waste into new resources at center $center->{id}");
 
         my %res;
         my $sum = 0;
