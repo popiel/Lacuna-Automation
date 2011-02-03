@@ -114,7 +114,7 @@ do {
                             $opts{'max-percent'} * 100, $maximum_waste
                         )
                     );
-                    waste_disposal( $s, $maximum_waste );
+                    waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
                 }
             }
         }
