@@ -249,6 +249,7 @@ sub waste_disposal {
     my $dumped   = scow_dump( $s, $amount );
     output("Shipped off $dumped units of waste via scow");
 
+    return if ($dumped >= $amount);
     my $recycled = recycle( $s, ($amount - $dumped) );
     if (keys %$recycled) {
         output(
