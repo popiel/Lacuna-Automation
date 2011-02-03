@@ -337,7 +337,14 @@ sub scow_dump {
         grep { $_->{type} eq "scow" && $_->{task} eq "Docked" }
         @{$ships->{available}}
     ) {
-        my $result = $client->call(spaceport => send_ship => $scow->{id}, $target) unless $opts{'dry-run'};
+        my $result = eval {
+            $client->call(spaceport => send_ship => $scow->{id}, $target) unless $opts{'dry-run'};
+        };
+        if ( $@ ) {
+            verbose("Sending scow $scow->{id} failed: $!");
+            next;
+        }
+
         output("Sent scow '$scow->{name}' ($scow->{hold_size} waste) to $s->{star_name}");
         $dumped += $scow->{hold_size};
         verbose("dupmed $dumped of $amount so far");
