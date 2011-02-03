@@ -104,13 +104,18 @@ do {
             output("$hours_full hours until waste is full; currently at $s->{waste_stored} units");
 
             if ( $opts{'max-percent'} ) {
-                verbose(
-                    sprintf(
-                        'Attempting to keep keep waste under %f%% (%d) units',
-                        $opts{'max-percent'} * 100, $maximum_waste
-                    )
-                );
-                waste_disposal( $s, $maximum_waste );
+                if ( $s->{waste_stored} <= $maximum_waste ) {
+                    output( 'Current waste storage is below the max. Skipping waste disposal' );
+                }
+                else {
+                    verbose(
+                        sprintf(
+                            'Attempting to keep keep waste under %f%% (%d) units',
+                            $opts{'max-percent'} * 100, $maximum_waste
+                        )
+                    );
+                    waste_disposal( $s, $maximum_waste );
+                }
             }
         }
         else {
