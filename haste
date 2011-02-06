@@ -92,6 +92,10 @@ do {
                 verbose("We have less than our threshold of $minimum_waste units of waste");
                 make_waste( $s, $minimum_waste - $s->{waste_stored} );
             }
+            elsif ( $s->{waste_stored} > $maximum_waste ) {
+                verbose( "More than $maximum_waste stored; disposing of some" );
+                waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
+            }
             else {
                 verbose("We have more than enough waste stored; do nothing");
             }
