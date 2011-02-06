@@ -76,6 +76,7 @@ do {
             ( $opts{'keep-hours'}  ? abs( $s->{waste_hour}     * $opts{'keep-hours'}  ) : () ),
             ( $opts{'keep-units'}  ? $opts{'keep-units'}                                : () ),
             ( $opts{'min-percent'} ? int( $s->{waste_capacity} * $opts{'min-percent'} ) : () ),
+            0
         );
         my $maximum_waste =
             ( $opts{'max-percent'} ? int( $s->{waste_capacity} * $opts{'max-percent'} ) : $s->{waste_capacity}  );
