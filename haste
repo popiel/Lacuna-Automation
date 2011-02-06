@@ -79,7 +79,10 @@ do {
             0
         );
         my $maximum_waste =
-            ( $opts{'max-percent'} ? int( $s->{waste_capacity} * $opts{'max-percent'} ) : $s->{waste_capacity}  );
+            ( $opts{'max-percent'} )
+                ? int( $s->{waste_capacity} * $opts{'max-percent'} )
+                : $s->{waste_capacity}
+        ;
 
         verbose("keeping waste between $minimum_waste and $maximum_waste units");
         if ($s->{waste_hour} < 0) { # we're burning waste
