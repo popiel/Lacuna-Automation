@@ -195,15 +195,7 @@ sub make_waste {
     my ($s, $limit) = @_;
 
     verbose("Need to create $limit units of waste");
-    output("Gathering resource information");
-
-    my %resources = map { $_ => $s->{"${_}_stored"} } qw( food water energy ore );
-
-    verbose( 'current resources: ', Dumper( \%resources ) );
-
-    my %resource_dump = proportionalize( $limit, \%resources );
-    verbose("proportionalized dump: ",Dumper( \%resource_dump ) );
-
+    verbose("Gathering storage facility information");
     # get the storage facilities on this planet
     my $body_buildings = $client->body_buildings($s->{id})->{'buildings'};
     my %seen;
@@ -216,6 +208,15 @@ sub make_waste {
                 : 0
         }
         keys %{$body_buildings};
+
+    output("Gathering resource information");
+    # only consider resources that we can dump
+    my %resources = map { $_ => $s->{"${_}_stored"} } keys %seen;
+
+    verbose( 'current resources: ', Dumper( \%resources ) );
+
+    my %resource_dump = proportionalize( $limit, \%resources );
+    verbose("proportionalized dump: ",Dumper( \%resource_dump ) );
 
     verbose('storage facilities: ',Dumper(\%storage_facilities));
     dump_resource( $storage_facilities{$_}, $_, $resource_dump{ $_ } ) for ( keys %resource_dump );
