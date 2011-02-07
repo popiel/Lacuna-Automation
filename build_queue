@@ -59,15 +59,19 @@ for my $j ($[..$#queue) {
   exit(0) if $abort;
   my $command = $queue[$j];
   chomp $command;
+  $command =~ s/wait quietly/-wait/;
+  my $quiet;
+  $quiet = 1 if $command =~ s/^\-//;
   $abort = 1 if $command =~ s/^\!//;
+  my $sleepy = (localtime())[1] % 30;
 
   print "Inspecting $command\n" if $debug;
-  if ($command =~ /^wait *(quietly)? *(.*)/) {
-    my ($quiet, $until) = ($1, $2);
+  if ($command =~ /^wait *(.*)/) {
+    my $until = $1;
     my $date = ParseDate($until);
     if (!$quiet) {
       emit("Waiting until ".UnixDate($date, "%Y-%m-%d %H:%M"));
-      splice(@queue, $j, 1, "wait quietly $until");
+      splice(@queue, $j, 1, "-$queue[$j]");
       write_queue();
     }
     if (UnixDate($date, "%s") < time()) {
@@ -82,13 +86,18 @@ for my $j ($[..$#queue) {
     $buildable ||= $client->body_buildable($body_id);
     my $reqs = $buildable->{buildable}{$name};
     unless ($reqs && $reqs->{build}{can}) {
-      emit("Cannot build $name: $reqs->{build}{reason}[1]");
+      emit("Cannot build $name: $reqs->{build}{reason}[1]") unless $quiet && $sleepy;
+      if (!$quiet) {
+        splice(@queue, $j, 1, "-$queue[$j]");
+        write_queue();
+      }
       next;
     }
     my $build = $client->body_build($body_id, $name);
     if ($build) {
       emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
       splice(@queue, $j, 1);
+      @queue = map { s/^\-//; $_; } @queue;
       write_queue();
       exit(0);
     }
@@ -103,12 +112,17 @@ for my $j ($[..$#queue) {
       if ($building->{name} eq $name && (!$level || $building->{level} == $level)) {
         my $view = $client->building_view($building->{url}, $id);
         unless ($view && $view->{building}{upgrade}{can}) {
-          emit("Cannot upgrade $level $name: $view->{building}{upgrade}{reason}[1]");
+          emit("Cannot upgrade $level $name: $view->{building}{upgrade}{reason}[1]") unless $quiet && $sleepy;
+          if ($queue[$j] !~ /^\-/) {
+            splice(@queue, $j, 1, "-$queue[$j]");
+            write_queue();
+          }
           next;
         }
         my $upgrade = $client->building_upgrade($building->{url}, $id);
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
         splice(@queue, $j, 1);
+        @queue = map { s/^\-//; $_; } @queue;
         write_queue();
         exit(0);
       }
