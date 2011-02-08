@@ -33,6 +33,8 @@ GetOptions(\%opts,
     'max-percent|max=f',
 ) or die usage();
 
+die usage() if $opts{help};
+
 # Ensure we have some kind of threshold
 unless ( grep { $opts{$_} } qw( keep-hours keep-kilos min-percent max-percent ) ) {
     die usage();
