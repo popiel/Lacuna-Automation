@@ -392,13 +392,14 @@ sub recycle {
             verbose("we can hold $res{$res} more units of $res");
         }
 
+        my %recycle_now;
         for my $res (qw(ore water energy)) {
-            $recycled{$res} = int($res{$res} * $waste / $sum);
+            $recycled{$res} += $recycle_now{$res} = int($res{$res} * $waste / $sum);
             verbose("we want to make $res{$res} units of $res");
             $client->body_status($s->{id})->{"${res}_stored"} -= $recycled{$res};
         }
 
-        $client->recycle_recycle($center->{id}, $recycled{water}, $recycled{ore}, $recycled{energy})
+        $client->recycle_recycle($center->{id}, $recycle_now{water}, $recycle_now{ore}, $recycle_now{energy})
             unless $opts{'dry-run'};
         output("Recycled for $recycled{ore} ore, $recycled{water} water, and $recycled{energy} energy.");
     }
