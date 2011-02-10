@@ -33,6 +33,8 @@ GetOptions(\%opts,
     'max-percent|max=f',
 ) or die usage();
 
+die usage() if $opts{help};
+
 # Ensure we have some kind of threshold
 unless ( grep { $opts{$_} } qw( keep-hours keep-kilos min-percent max-percent ) ) {
     die usage();
@@ -90,18 +92,6 @@ do {
 
             my $hours_left = sprintf('%0.2f', -1 * $s->{waste_stored} / $s->{waste_hour});
             output("We have $hours_left hours ($s->{waste_stored} units) of waste stored");
-
-            if ( $s->{waste_stored} < $minimum_waste ) {
-                verbose("We have less than our threshold of $minimum_waste units of waste");
-                make_waste( $s, $minimum_waste - $s->{waste_stored} );
-            }
-            elsif ( $s->{waste_stored} > $maximum_waste ) {
-                verbose( "More than $maximum_waste stored; disposing of some" );
-                waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
-            }
-            else {
-                verbose("We have more than enough waste stored; do nothing");
-            }
         }
         elsif ($s->{waste_hour} > 0) { # we are making waste already
             output("Waste rate is positive (+)");
@@ -110,24 +100,21 @@ do {
                 ( $s->{waste_capacity} - $s->{waste_stored} ) / $s->{waste_hour}
             );
             output("$hours_full hours until waste is full; currently at $s->{waste_stored} units");
-
-            if ( $opts{'max-percent'} ) {
-                if ( $s->{waste_stored} <= $maximum_waste ) {
-                    output( 'Current waste storage is below the max. Skipping waste disposal' );
-                }
-                else {
-                    verbose(
-                        sprintf(
-                            'Attempting to keep keep waste under %f%% (%d) units',
-                            $opts{'max-percent'} * 100, $maximum_waste
-                        )
-                    );
-                    waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
-                }
-            }
         }
         else {
             output("You have attained waste zen.");
+        }
+
+        if ( $s->{waste_stored} < $minimum_waste ) {
+            verbose("We have less than our threshold of $minimum_waste units of waste");
+            make_waste( $s, $minimum_waste - $s->{waste_stored} );
+        }
+        elsif ( $s->{waste_stored} > $maximum_waste ) {
+            verbose( "More than $maximum_waste stored; disposing of some" );
+            waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
+        }
+        else {
+            verbose("Stored waste is currently 'in-the-zone'. Do nothing.");
         }
 
         output("$planet_name ... done");
