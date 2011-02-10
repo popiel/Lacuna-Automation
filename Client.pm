@@ -285,6 +285,8 @@ sub body_build {
   my $self = shift;
   my $body_id = shift;
   my $building_name = shift;
+  my $sx = shift;
+  my $sy = shift;
 
   my $url = "";
   my %plots;
@@ -296,10 +298,12 @@ sub body_build {
   my @plots;
   for my $x (-5..5) {
     for my $y (-5..5) {
+      next if -1 <= $x && $x <= 1 && -1 <= $y && $y <= 1;
       push(@plots, [ $x, $y ]) unless $plots{$x,$y};
     }
   }
   my $place = $plots[int(rand(@plots))];
+  $place = [ $sx, $sy ] unless $plots{$sx,$sy};
 
   $url ||= $self->body_buildable($body_id)->{buildable}{$building_name}{url};
 

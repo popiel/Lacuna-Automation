@@ -22,8 +22,12 @@ build_queue [--body Name] [--queue Name]
   Look at the sample build queue template for an idea of how to format the build queue.
 
   Commands:
-  build <building name>
-    Build a new building at a random place on the map.
+  build [<x> <y>] <building name>
+    Build a new building.
+    The coordinate of where to place it on the map is optional;
+    if the specified space is already taken (or no space is given),
+    then the building will be placed randomly outside the central
+    square -1 <= x <= 1, -1 <= y <= 1.
 
   upgrade <level> <building name>
     Upgrade a building of a particular level.
@@ -33,8 +37,19 @@ build_queue [--body Name] [--queue Name]
   wait <timestamp>
     Wait until a particular time.
 
+  resources <options>
+    Upgrade resources, picking whichever resource (food, ore, water, energy)
+    is most needed, and upgrading the building with the greatest payoff in
+    resource/time investment.
+    Options are a comma separated list of:
+      <count>x<building name>: Maximum number of building type that should be maintained
+
+    Note that the resources command will only upgrade buildings; it will not
+    build new ones.
+
   Additional options:
   Prefix a queue entry with ! to make it non-skippable.
+  Prefix a queue entry with - to make emit less noise to the logs.
 
 park_ranger [--body Name]
   Try to throw parties in all parks on the planet.
