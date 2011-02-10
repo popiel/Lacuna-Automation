@@ -136,6 +136,11 @@ for my $j ($[..$#queue) {
     grep(s/^\s*//, @args);
     grep(s/\s*$//, @args);
 
+    my $max_level = 15;
+    for my $arg (@args) {
+      $max_level = $1 if $arg =~ /max level (\d+)/;
+    }
+
     my $status = $client->body_status($body_id);
     my %ratio;
     for my $type (qw(food ore water energy)) {
@@ -153,6 +158,7 @@ for my $j ($[..$#queue) {
       push(@pruned, $building);
     }
     @buildings = @pruned;
+    @buildings = grep { $_->{level} < $max_level } @buildings;
     @buildings = grep { $_->{"${type}_hour"} > 0 } map { populate_building_with_production($_) } @buildings;
     for my $building (@buildings) {
       $building->{cost_time} = List::Util::max($building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / $status->{"${_}_hour"} } qw(food ore water energy));

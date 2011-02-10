@@ -42,7 +42,8 @@ build_queue [--body Name] [--queue Name]
     is most needed, and upgrading the building with the greatest payoff in
     resource/time investment.
     Options are a comma separated list of:
-      <count>x<building name>: Maximum number of building type that should be maintained
+      max level <level>       : don't upgrade beyond given level
+      <count>x<building name> : maximum number of building type that should be maintained
 
     Note that the resources command will only upgrade buildings; it will not
     build new ones.
