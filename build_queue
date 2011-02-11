@@ -161,7 +161,8 @@ for my $j ($[..$#queue) {
     @buildings = grep { $_->{level} < $max_level } @buildings;
     @buildings = grep { $_->{"${type}_hour"} > 0 } map { populate_building_with_production($_) } @buildings;
     for my $building (@buildings) {
-      $building->{cost_time} = List::Util::max($building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / $status->{"${_}_hour"} } qw(food ore water energy));
+      $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / $status->{"${_}_hour"} } qw(food ore water energy));
+      $building->{cost_time} = List::Util::max($building->{delay} + $building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / $status->{"${_}_hour"} } qw(food ore water energy));
       $building->{payoff} = $building->{upgrade}{production}{"${type}_hour"} - $building->{"${type}_hour"};
       $building->{payoff_ratio} = $building->{payoff} / $building->{cost_time};
     }
@@ -169,7 +170,7 @@ for my $j ($[..$#queue) {
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     if (!($quiet && $sleepy)) {
       for my $building (@buildings) {
-        printf("%s payoff ratio: %8.3f: %d %s\n", $type, $building->{payoff_ratio}, $building->{level}, $building->{name});
+        printf("%s payoff ratio: %8.3f: delay %8.3f: %d %s\n", $type, $building->{payoff_ratio}, $building->{delay}, $building->{level}, $building->{name});
       }
     }
 
