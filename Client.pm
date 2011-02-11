@@ -154,9 +154,12 @@ sub call {
     print $response->content;
     die $@;
   }
-  LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
-                            data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}))
-    if $result->{error};
+  if ($result->{error}) {
+    # warn "Request: ".encode_json($message)."\n";
+    warn "Error Response: $result->{error}{code}: $result->{error}{message}\n";
+    LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
+                              data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
+  }
   croak "Call failed: ".($response->status_line) unless $response->is_success;
   croak "Call response without result" unless $result->{result};
   $self->{session_id} = $result->{result}{session_id} if $result->{result}{session_id};
@@ -303,7 +306,7 @@ sub body_build {
     }
   }
   my $place = $plots[int(rand(@plots))];
-  $place = [ $sx, $sy ] unless $plots{$sx,$sy};
+  $place = [ $sx, $sy ] if ($sx || $sy) && !$plots{$sx,$sy};
 
   $url ||= $self->body_buildable($body_id)->{buildable}{$building_name}{url};
 
