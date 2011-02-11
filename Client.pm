@@ -347,7 +347,7 @@ sub building_upgrade {
       my $e = Exception::Class->caught();
       ref $e ? $e->rethrow : die $e;
     }
-  }
+  };
   unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
   unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
   unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;
