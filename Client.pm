@@ -331,7 +331,23 @@ sub building_upgrade {
   my $url = shift;
   my $building_id = shift;
 
-  my $result = $self->call($url => upgrade => $building_id);
+  my $result;
+  eval {
+    $result = $self->call($url => upgrade => $building_id);
+    1;
+  } or do {
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      if ($e->code eq 1011 || $e->code eq 1012) {
+        # Not enough X in storage / production
+        unlink("cache/$self->{empire_name}/building/$building_id/view");
+      }
+      $e->rethrow;
+    }
+    else {
+      my $e = Exception::Class->caught();
+      ref $e ? $e->rethrow : die $e;
+    }
+  }
   unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
   unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
   unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;
