@@ -54,7 +54,7 @@ my $empire = $client->empire_status();
 # Take $empire->{planets} and turn it inside-out, but cross-reference %do_planets to
 # 1) get a hash of only the planets we care about; or
 # 2) get a hash of *all* planets
-my $grep = ( keys %do_planets )
+my $grep = ( scalar keys %do_planets )
     ? sub { exists $do_planets{ normalize_planet( $empire->{planets}{$_} ) } }
     : sub { 1 }
 ;
@@ -207,7 +207,7 @@ sub make_waste {
 
     verbose('storage facilities: ',Dumper(\%storage_facilities));
     dump_resource( $storage_facilities{$_}, $_, $resource_dump{ $_ } ) for ( keys %resource_dump );
-    unlink("cache/codon/body/$s->{id}/status");
+    $client->cache_invalidate( type => 'body_status', id => $s->{id} );
 }
 
 sub dump_resource {
@@ -265,7 +265,7 @@ sub waste_disposal {
         output("Could not recycle waste into resources");
     }
 
-    unlink("cache/codon/body/$s->{id}/status");
+    $client->cache_invalidate( type => 'body_status', id => $s->{id} );
 }
 
 sub proportionalize {
