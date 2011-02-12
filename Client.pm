@@ -322,6 +322,14 @@ sub building_build {
 
   unlink("cache/$self->{empire_name}/body/$body_id/buildable");
   my $result = $self->call($url => build => $body_id, $x, $y);
+  if ($result && $url =~ /oversight|orerefinery/) {
+    my %buildings = %{$self->body_buildings($result->{status}{body}{id})->{buildings}};
+    for my $id (keys(%buildings)) {
+      for my $level (1..30) {
+        unlink("cache/$self->{empire_name}/building/$id/stats_$level")
+      }
+    }
+  }
   unlink("cache/$self->{empire_name}/body/$body_id/buildings") if $result;
   return $result;
 }
@@ -348,6 +356,14 @@ sub building_upgrade {
       ref $e ? $e->rethrow : die $e;
     }
   };
+  if ($result && $url =~ /oversight|orerefinery/) {
+    my %buildings = %{$self->body_buildings($result->{status}{body}{id})->{buildings}};
+    for my $id (keys(%buildings)) {
+      for my $level (1..30) {
+        unlink("cache/$self->{empire_name}/building/$id/stats_$level")
+      }
+    }
+  }
   unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
   unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
   unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;

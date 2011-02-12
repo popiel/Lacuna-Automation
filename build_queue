@@ -199,58 +199,8 @@ sub populate_building_with_production {
   my @buildings = @_;
   my ($name,$level) = ($building->{name}, $building->{level});
   # print "Viewing data for $level $name\n";
-  my $base = $client->read_json("model/buildings/$name");
-  unless ($base) {
-    $base = $client->building_stats_for_level($building->{url}, $building->{id}, 15)->{building};
-    if ($name eq 'Mine' || $name eq 'Volcano') {
-      my $refinery = (grep { $_->{name} eq "Ore Refinery" } @buildings)[0];
-      $base->{ore_hour} /= 1 + $refinery->{level} * 0.05;
-    }
-    $client->write_json("model/buildings/$name", building_production => $base);
-  }
-  if ($name eq 'Mine' || $name eq 'Volcano') {
-    my $refinery = (grep { $_->{name} eq "Ore Refinery" } @buildings)[0];
-    $base->{ore_hour} *= 1 + $refinery->{level} * 0.05;
-  }
-
-  if ($level < $base->{level}) {
-    for ($level..($base->{level} - 1)) {
-      for my $key (keys(%{$base->{upgrade}{production}})) {
-        $base->{$key} /= 1.55;
-        $base->{upgrade}{production}{$key} /= 1.55;
-      }
-      for my $key (qw(food ore water energy waste)) {
-        $base->{upgrade}{cost}{$key} /= 1.75;
-      }
-    }
-  }
-  elsif ($level > $base->{level}) {
-    for (($base->{level} + 1)..$level) {
-      for my $key (keys(%{$base->{upgrade}{production}})) {
-        $base->{$key} *= 1.55;
-        $base->{upgrade}{production}{$key} *= 1.55;
-      }
-      for my $key (qw(food ore water energy waste)) {
-        $base->{upgrade}{cost}{$key} *= 1.75;
-      }
-    }
-  }
-
-  if ($debug) {
-    my $check = $client->building_view($building->{url}, $building->{id})->{building};
-    for my $key (keys(%{$base->{upgrade}{production}})) {
-      warn "Disagreement: $key expected $base->{$key}, actual $check->{$key}\n" if abs($base->{$key} - $check->{$key}) > 2;
-      warn "Disagreement: upgrade $key expected $base->{upgrade}{production}{$key}, actual $check->{upgrade}{production}{$key}\n" if abs($base->{upgrade}{production}{$key} - $check->{upgrade}{production}{$key}) > 2;
-    }
-    for my $key (qw(food ore water energy waste)) {
-      warn "Disagreement: cost $key expected $base->{upgrade}{cost}{$key}, actual $check->{upgrade}{cost}{$key}\n" if abs($base->{upgrade}{cost}{$key} - $check->{upgrade}{cost}{$key}) > 2;
-    }
-  }
-  
-  delete($base->{level});
-  delete($base->{id});
-
-  return { %$building, %$base };
+  my $stats = $client->building_stats_for_level($building->{url}, $building->{id}, $building->{level})->{building};
+  return { %$building, %$stats };
 }
 
 sub emit {
