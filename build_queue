@@ -159,7 +159,7 @@ for my $j ($[..$#queue) {
     }
     @buildings = @pruned;
     @buildings = grep { $_->{level} < $max_level } @buildings;
-    @buildings = grep { $_->{"${type}_hour"} > 0 } map { populate_building_with_production($_) } @buildings;
+    @buildings = grep { $_->{"${type}_hour"} > 0 } map { populate_building_with_production($_, @buildings) } @buildings;
     for my $building (@buildings) {
       $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / ($status->{"${_}_hour"} || 0.001) } qw(food ore water energy));
       $building->{cost_time} = List::Util::max($building->{delay} + $building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / ($status->{"${_}_hour"} || 1) } qw(food ore water energy));
@@ -175,8 +175,9 @@ for my $j ($[..$#queue) {
     }
 
     my $building = $buildings[0];
-    unless ($building->{upgrade}{can}) {
-      emit("Cannot upgrade $building->{level} $building->{name}: $building->{upgrade}{reason}[1]") unless $quiet && $sleepy;
+    my $view = $client->building_view($building->{url}, $building->{id})->{building};
+    unless ($view->{upgrade}{can}) {
+      emit("Cannot upgrade $building->{level} $building->{name}: $view->{upgrade}{reason}[1]") unless $quiet && $sleepy;
       if ($queue[$j] !~ /^\-/) {
         splice(@queue, $j, 1, "-$queue[$j]");
         write_queue();
@@ -195,9 +196,61 @@ for my $j ($[..$#queue) {
 
 sub populate_building_with_production {
   my $building = shift;
-  # print "Viewing data for $building->{level} $building->{name}\n";
-  my $result = $client->building_view($building->{url}, $building->{id})->{building};
-  return { %$building, %$result };
+  my @buildings = @_;
+  my ($name,$level) = ($building->{name}, $building->{level});
+  # print "Viewing data for $level $name\n";
+  my $base = $client->read_json("model/buildings/$name");
+  unless ($base) {
+    $base = $client->building_stats_for_level($building->{url}, $building->{id}, 15)->{building};
+    if ($name eq 'Mine' || $name eq 'Volcano') {
+      my $refinery = (grep { $_->{name} eq "Ore Refinery" } @buildings)[0];
+      $base->{ore_hour} /= 1 + $refinery->{level} * 0.05;
+    }
+    $client->write_json("model/buildings/$name", building_production => $base);
+  }
+  if ($name eq 'Mine' || $name eq 'Volcano') {
+    my $refinery = (grep { $_->{name} eq "Ore Refinery" } @buildings)[0];
+    $base->{ore_hour} *= 1 + $refinery->{level} * 0.05;
+  }
+
+  if ($level < $base->{level}) {
+    for ($level..($base->{level} - 1)) {
+      for my $key (keys(%{$base->{upgrade}{production}})) {
+        $base->{$key} /= 1.55;
+        $base->{upgrade}{production}{$key} /= 1.55;
+      }
+      for my $key (qw(food ore water energy waste)) {
+        $base->{upgrade}{cost}{$key} /= 1.75;
+      }
+    }
+  }
+  elsif ($level > $base->{level}) {
+    for (($base->{level} + 1)..$level) {
+      for my $key (keys(%{$base->{upgrade}{production}})) {
+        $base->{$key} *= 1.55;
+        $base->{upgrade}{production}{$key} *= 1.55;
+      }
+      for my $key (qw(food ore water energy waste)) {
+        $base->{upgrade}{cost}{$key} *= 1.75;
+      }
+    }
+  }
+
+  if ($debug) {
+    my $check = $client->building_view($building->{url}, $building->{id})->{building};
+    for my $key (keys(%{$base->{upgrade}{production}})) {
+      warn "Disagreement: $key expected $base->{$key}, actual $check->{$key}\n" if abs($base->{$key} - $check->{$key}) > 2;
+      warn "Disagreement: upgrade $key expected $base->{upgrade}{production}{$key}, actual $check->{upgrade}{production}{$key}\n" if abs($base->{upgrade}{production}{$key} - $check->{upgrade}{production}{$key}) > 2;
+    }
+    for my $key (qw(food ore water energy waste)) {
+      warn "Disagreement: cost $key expected $base->{upgrade}{cost}{$key}, actual $check->{upgrade}{cost}{$key}\n" if abs($base->{upgrade}{cost}{$key} - $check->{upgrade}{cost}{$key}) > 2;
+    }
+  }
+  
+  delete($base->{level});
+  delete($base->{id});
+
+  return { %$building, %$base };
 }
 
 sub emit {
