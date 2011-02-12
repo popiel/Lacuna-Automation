@@ -55,6 +55,8 @@ close $file;
 
 my $buildable;
 my $abort;
+my $rebuild;
+my $requeue;
 for my $j ($[..$#queue) {
   exit(0) if $abort;
   my $command = $queue[$j];
@@ -63,6 +65,9 @@ for my $j ($[..$#queue) {
   my $quiet;
   $quiet = 1 if $command =~ s/^\-//;
   $abort = 1 if $command =~ s/^\!//;
+  my $priority = ($abort) ? '!' : '';
+  $rebuild = 1 if $command =~ s/^\+\+//;
+  $requeue = 1 if $command =~ s/^\+//;
   my $sleepy = (localtime())[1] % 30;
 
   print "Inspecting $command\n" if $debug;
@@ -99,6 +104,14 @@ for my $j ($[..$#queue) {
     if ($build) {
       emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
       splice(@queue, $j, 1);
+      if ($rebuild) {
+        emit("Upgrading $name at the front of the queue");
+        unshift(@queue, "$priority++upgrade 1 $name\n");
+      }
+      elsif ($requeue) {
+        emit("Upgrading $name at the back of the queue\n");
+        push(@queue, "+upgrade 1 $name");
+      }
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
       exit(0);
@@ -124,6 +137,14 @@ for my $j ($[..$#queue) {
         my $upgrade = $client->building_upgrade($building->{url}, $id);
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
         splice(@queue, $j, 1);
+        if ($rebuild) {
+          emit("Upgrading $name at the front of the queue");
+          unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, $level + 1, $name));
+        }
+        elsif ($requeue) {
+          emit("Upgrading $name at the back of the queue");
+          push(@queue, sprintf("+upgrade %s %s\n", $level + 1, $name));
+        }
         @queue = map { s/^\-//; $_; } @queue;
         write_queue();
         exit(0);
