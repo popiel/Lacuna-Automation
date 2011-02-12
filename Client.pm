@@ -646,8 +646,8 @@ sub cache_read {
 sub cache_write {
     my ($self, %args) = @_;
 
-    $args{_time} = time();
-    $args{_invalid} = $args{invalid} if $args{invalid};
+    $args{data}{_time} = time();
+    $args{data}{_invalid} = $args{invalid} if $args{invalid};
 
     my $cache_file = $self->_cache_path( $args{type}, $args{id}, $args{level} );
     $self->write_json( $cache_file , $args{type}, $args{data} );
