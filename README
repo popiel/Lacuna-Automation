@@ -51,6 +51,8 @@ build_queue [--body Name] [--queue Name]
   Additional options:
   Prefix a queue entry with ! to make it non-skippable.
   Prefix a queue entry with - to make emit less noise to the logs.
+  Prefix a build or upgrade entry with + or ++ to requeue another upgrade for
+    the same building at the tail or head of the queue.
 
 park_ranger [--body Name]
   Try to throw parties in all parks on the planet.
