@@ -355,8 +355,8 @@ sub building_repair {
 
   my $result = $self->call($url => repair => $building_id);
   if ( $result ) {
-      $self->cache_invalidate( type => 'buildings',     id => $building_id );
-      $self->cache_invalidate( type => 'building_view', id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'building_view', id => $building_id );
   }
   return $result;
 }
