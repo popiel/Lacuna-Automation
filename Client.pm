@@ -27,9 +27,7 @@ sub new {
 }
 
 sub read_json {
-  my $self = shift;
-  my $filename = shift;
-  my $filetype = shift;
+  my ($self, $filename, $filetype) = @_;
 
   my $file;
 # warn "filename: $filename\n";
@@ -37,7 +35,7 @@ sub read_json {
     croak "Could not read $filetype file $filename: $!" if $filetype;
     return;
   }
-  my $json = join('', (<$file>));
+  my $json = do { local $/; <$file> };
   close($file);
   my $result = decode_json($json);
   return $result;
@@ -169,18 +167,13 @@ sub call {
   $result->{result}{status}{_time} = $time;
   my $empire = $result->{result}{status}{empire};
   if ($empire) {
-    $empire->{_time} = $time;
-    $self->write_json("cache/$self->{empire_name}/empire/status", empire_status => $empire);
+    $self->cache_write( type => 'empire_status', data => $empire );
   }
   my $body = $result->{result}{status}{body};
   if ($body) {
-    $body->{_time} = $time;
-    my @arrivals;
-    if ($body->{incoming_foreign_ships}) {
-      @arrivals = map { parse_time($_->{date_arrives}) } @{$body->{incoming_foreign_ships}};
-    }
-    $result->{_invalid} = List::Util::min(time() + 3600, @arrivals);
-    $self->write_json("cache/$self->{empire_name}/body/$body->{id}/status", body_status => $body);
+    my @arrivals = map { parse_time($_->{date_arrives}) } @{ $body->{incoming_foreign_ships} || [] };
+    my $invalid = List::Util::min(time() + 3600, @arrivals);
+    $self->cache_write( type => 'body_status', id => $body->{id}, data => $body, invalid => $invalid );
   }
   return $result->{result};
 }
@@ -189,24 +182,22 @@ sub call {
 sub read_session {
   my $self = shift;
 
-  my $file;
-  open($file, "<", "cache/$self->{empire_name}/session_id") or return;
-  $self->{session_id} = <$file>;
-  $self->{session_time} = (stat $file)[9];
-  close($file);
-  chomp($self->{session_id});
+  my $session = $self->cache_read( type => 'session' );
+  @$self{ keys %$session } = values %$session;
+
+  return;
 }
 
 sub write_session {
   my $self = shift;
 
-  my $dir = "cache/$self->{empire_name}";
-  -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
+  my $session = {
+      session_id   => $self->{session_id},
+      session_time => time(),
+  };
+  $self->cache_write( type => 'session', data => $session );
 
-  my $file;
-  open($file, ">", "cache/$self->{empire_name}/session_id") or die "Couldn't write cache/$self->{empire_name}/session_id: $!";
-  print $file "$self->{session_id}\n";
-  close($file);
+  return;
 }
 
 sub session_id {
@@ -226,38 +217,38 @@ sub session_id {
 sub empire_status {
   my $self = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/empire/status");
-  return $result if $result->{_time} >= time() - 610;
-  $result = $self->call(empire => login => $self->{empire_name}, $self->{empire_password}, $self->{api_key});
-  return $result->{status}{empire} if $result->{status}{empire};
-  croak "Couldn't get empire status";
+  my $result = $self->cache_read( type => 'empire_status', stale => 610 );
+  $result && return $result;
+
+  $result = $self->call(empire => login => $self->{empire_name}, $self->{empire_password}, $self->{api_key})->{status}{empire};
+  return $result || croak "Couldn't get empire status";
 }
 
 sub body_status {
   my $self = shift;
   my $body_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/body/$body_id/status");
-  return $result if $result->{_time} >= time() - 500 && $result->{_invalid} > time();
-  $result = $self->body_buildings($body_id);
-  return $result->{status}{body} if $result->{status}{body};
-  croak "Couldn't get body status";
+  my $result =
+          $self->cache_read( type => 'body_status', id => $body_id, stale => 500 ) ||
+          $self->body_buildings($body_id)->{status}{body};
+  return $result || croak "Couldn't get body status";
 }
 
 sub body_buildings {
   my $self = shift;
   my $body_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/body/$body_id/buildings");
-  return $result if $result->{_invalid} > time();
+  my $result = $self->cache_read( type => 'buildings', id => $body_id );
+  return $result if $result;
+
   $result = $self->call(body => get_buildings => $body_id);
   my @completions;
   for my $building (values(%{$result->{buildings}})) {
     push(@completions, parse_time($building->{pending_build}{end})) if $building->{pending_build};
     push(@completions, parse_time($building->{work         }{end})) if $building->{work};
   }
-  $result->{_invalid} = List::Util::min(time() + 3600, @completions);
-  $self->write_json("cache/$self->{empire_name}/body/$body_id/buildings", buildings => $result);
+  my $invalid = List::Util::min(time() + 3600, @completions);
+  $self->cache_write( type => 'buildings', id => $body_id, data => $result, invalid => $invalid );
   return $result;
 }
 
@@ -265,8 +256,9 @@ sub body_buildable {
   my $self = shift;
   my $body_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/body/$body_id/buildable");
-  return $result if $result->{_invalid} > time();
+  my $result = $self->cache_read( type => 'buildable', id => $body_id );
+  return $result if $result;
+
   $result = $self->call(body => get_buildable => $body_id);
   my $buildings = $self->body_buildings($body_id);
   my @completions;
@@ -279,8 +271,8 @@ sub body_buildable {
   if ($body->{incoming_foreign_ships}) {
     push(@completions, map { parse_time($_->{date_arrives}) } @{$body->{incoming_foreign_ships}});
   }
-  $result->{_invalid} = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
-  $self->write_json("cache/$self->{empire_name}/body/$body_id/buildable", buildable => $result);
+  my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
+  $self->cache_write( type => 'buildable', id => $body, invalid => $invalid, data => $result );
   return $result;
 }
 
@@ -299,8 +291,8 @@ sub body_build {
     $url = $building->{url} if $building->{name} eq $building_name;
   }
   my @plots;
-  for my $x (-5..5) {
-    for my $y (-5..5) {
+  for my $x (-5 .. 5) {
+    for my $y (-5 .. 5) {
       next if -1 <= $x && $x <= 1 && -1 <= $y && $y <= 1;
       push(@plots, [ $x, $y ]) unless $plots{$x,$y};
     }
@@ -320,17 +312,22 @@ sub building_build {
   my $x = shift;
   my $y = shift;
 
-  unlink("cache/$self->{empire_name}/body/$body_id/buildable");
+  # invalidate the buildable cache
+  $self->cache_invalidate( type => 'buildable', id => $body_id );
   my $result = $self->call($url => build => $body_id, $x, $y);
-  if ($result && $url =~ /oversight|orerefinery/) {
-    my %buildings = %{$self->body_buildings($result->{status}{body}{id})->{buildings}};
-    for my $id (keys(%buildings)) {
-      for my $level (1..30) {
-        unlink("cache/$self->{empire_name}/building/$id/stats_$level")
+
+  if ( $result ) {
+    # invalidate the buildings cache
+    $self->cache_invalidate( type => 'buildings', id => $body_id );
+
+    # invalidate building caches if we upgrade oversight ministry or ore refinery
+    if ( $url =~ /oversite|orerefinery/ ) {
+      for my $id ( keys %{$self->body_buildings($result->{status}{body}{id})->{buildings}} ) {
+        $self->cache_invalidate( type => 'building_stats', id => $id, level => $_ ) for ( 0 .. 30 );
       }
     }
   }
-  unlink("cache/$self->{empire_name}/body/$body_id/buildings") if $result;
+
   return $result;
 }
 
@@ -339,15 +336,27 @@ sub building_upgrade {
   my $url = shift;
   my $building_id = shift;
 
-  my $result;
-  eval {
-    $result = $self->call($url => upgrade => $building_id);
-    1;
-  } or do {
+  if ( my $result = eval { $self->call($url => upgrade => $building_id); } ) {
+      $self->cache_invalidate( type => 'building_view', id => $building_id                );
+      $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'buildable',     id => $result->{status}{body}{id} ) if $url =~ /oversight|orerefinery|intelligence|university/;
+
+      # invalidate the buildings cache
+      $self->cache_invalidate( type => 'buildings', id => $result->{status}{body}{id} );
+
+      # invalidate building caches if we upgrade oversight ministry or ore refinery
+      if ( $url =~ /oversite|orerefinery/ ) {
+          for my $id ( keys %{$self->body_buildings($result->{status}{body}{id})->{buildings}} ) {
+              $self->cache_invalidate( type => 'building_stats', id => $id, level => $_ ) for ( 0 .. 30 );
+          }
+      }
+      return $result;
+  }
+  else {
     if (my $e = Exception::Class->caught('LacunaRPCException')) {
       if ($e->code eq 1011 || $e->code eq 1012) {
         # Not enough X in storage / production
-        unlink("cache/$self->{empire_name}/building/$building_id/view");
+        $self->cache_invalidate( type => 'building_view', id => $building_id                );
       }
       $e->rethrow;
     }
@@ -355,19 +364,7 @@ sub building_upgrade {
       my $e = Exception::Class->caught();
       ref $e ? $e->rethrow : die $e;
     }
-  };
-  if ($result && $url =~ /oversight|orerefinery/) {
-    my %buildings = %{$self->body_buildings($result->{status}{body}{id})->{buildings}};
-    for my $id (keys(%buildings)) {
-      for my $level (1..30) {
-        unlink("cache/$self->{empire_name}/building/$id/stats_$level")
-      }
-    }
   }
-  unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
-  unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
-  unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildable") if $result && $url =~ /oversight|orerefinery|intelligence|university/;
-  return $result;
 }
 
 sub building_repair {
@@ -376,8 +373,10 @@ sub building_repair {
   my $building_id = shift;
 
   my $result = $self->call($url => repair => $building_id);
-  unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
-  unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
+  if ( $result ) {
+      $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'building_view', id => $building_id );
+  }
   return $result;
 }
 
@@ -386,8 +385,9 @@ sub building_view {
   my $url = shift;
   my $building_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/view");
-  return $result if $result->{_invalid} > time();
+  my $result = $self->cache_read( type => 'building_view', id => $building_id );
+  return $result if $result;
+
   $result = $self->call($url, view => $building_id);
   my @completions;
   for my $building ($result->{building}) {
@@ -395,8 +395,9 @@ sub building_view {
     push(@completions, parse_time($building->{work         }{end})) if $building->{work};
   }
   push(@completions, time() + 300) unless $result->{building}{upgrade}{can};
-  $result->{_invalid} = List::Util::min(time() + 3600, @completions);
-  $self->write_json("cache/$self->{empire_name}/building/$building_id/view", building_view => $result);
+  my $invalid = List::Util::min(time() + 3600, @completions);
+
+  $self->cache_write( type => 'building_view', id => $building_id, invalid => $invalid, data => $result );
   return $result;
 }
 
@@ -406,10 +407,11 @@ sub building_stats_for_level {
   my $building_id = shift;
   my $level = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/stats_$level");
+  my $result = $self->cache_read( type => 'building_stats', id => $building_id, level => $level );
   return $result if $result;
+
   $result = $self->call($url, get_stats_for_level => $building_id, $level);
-  $self->write_json("cache/$self->{empire_name}/building/$building_id/stats_$level", building_stats => $result);
+  $self->cache_write( type => 'building_stats', id => $building_id, level => $level, data => $result );
   return $result;
 }
 
@@ -418,8 +420,11 @@ sub park_party {
   my $building_id = shift;
 
   my $result = $self->call(park => throw_a_party => $building_id);
-  unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
-  unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
+
+  if ( $result ) {
+      $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'building_view', id => $building_id );
+  }
   return $result;
 }
 
@@ -431,8 +436,10 @@ sub recycle_recycle {
   my $energy = shift;
 
   my $result = $self->call(wasterecycling => recycle => $building_id, $water, $ore, $energy, 0);
-  unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
-  unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
+  if ( $result ) {
+      $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'building_view', id => $building_id );
+  }
   return $result;
 }
 
@@ -442,8 +449,10 @@ sub archaeology_search {
   my $ore = shift;
 
   my $result = $self->call(archaeology => search_for_glyph => $building_id, $ore);
-  unlink("cache/$self->{empire_name}/body/$result->{status}{body}{id}/buildings") if $result;
-  unlink("cache/$self->{empire_name}/building/$building_id/view") if $result;
+  if ( $result ) {
+      $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'building_view', id => $building_id );
+  }
   return $result;
 }
 
@@ -467,8 +476,9 @@ sub port_all_ships {
   my $self = shift;
   my $building_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/view_all_ships");
-  return $result if $result->{_invalid} > time();
+  my $result = $self->cache_read( type => 'spaceport_view_all_ships', id => $building_id );
+  return $result if $result;
+
   my $page = 1;
   my @ships;
   for (;;) {
@@ -486,8 +496,8 @@ sub port_all_ships {
     }
     push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
   }
-  $result->{_invalid} = List::Util::min(time() + 3600, @completions);
-  $self->write_json("cache/$self->{empire_name}/building/$building_id/view_all_ships", spaceport_view_all_ships => $result);
+  my $invalid = List::Util::min(time() + 3600, @completions);
+  $self->cache_write( type => 'spaceport_view_all_ships', id => $building_id, data => $result );
   return $result;
 }
 
@@ -495,8 +505,9 @@ sub get_probed_stars {
   my $self = shift;
   my $building_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/get_probed_stars");
-  return $result if $result->{_invalid} > time();
+  my $result = $self->cache_read( type => 'observatory_get_probed_stars', id => $building_id );
+  return $result;
+
   my $page = 1;
   my @stars;
   for (;;) {
@@ -506,8 +517,8 @@ sub get_probed_stars {
     $page++;
   }
   $result->{stars} = \@stars;
-  $result->{_invalid} = time() + 3600;
-  $self->write_json("cache/$self->{empire_name}/building/$building_id/get_probed_stars", observatory_get_probed_stars => $result);
+  my $invalid = time() + 3600;
+  $self->cache_write( type => 'observatory_get_probed_stars', id => $building_id, data => $result, invalid => $invalid );
   return $result;
 }
 
@@ -533,8 +544,8 @@ sub yard_queue {
   my $self = shift;
   my $building_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/building/$building_id/view_build_queue");
-  return $result if $result->{_invalid} > time();
+  my $result = $self->cache_read( type => 'shipyard_view_build_queue', id => $building_id );
+  return $result if $result;
   my $page = 1;
   my @ships;
   for (;;) {
@@ -552,8 +563,8 @@ sub yard_queue {
     }
     push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
   }
-  $result->{_invalid} = List::Util::min(time() + 3600, @completions);
-  $self->write_json("cache/$self->{empire_name}/building/$building_id/view_build_queue", shipyard_view_build_queue => $result);
+  my $invalid = List::Util::min(time() + 3600, @completions);
+  $self->cache_write( type => 'shipyard_view_build_queue', id => $building_id, data => $result, invalid => $invalid );
   return $result;
 }
 
@@ -561,8 +572,8 @@ sub yard_buildable {
   my $self = shift;
   my $yard_id = shift;
 
-  my $result = $self->read_json("cache/$self->{empire_name}/building/$yard_id/buildable");
-  return $result if $result->{_invalid} > time();
+  my $result = $self->cache_read( type => 'buildable', id => $yard_id );
+  return $result if $result;
   $result = $self->call(shipyard => get_buildable => $yard_id);
 
   # Building completions can affect shipyard builds
@@ -574,8 +585,8 @@ sub yard_buildable {
     push(@completions, parse_time($building->{pending_build}{end}));
   }
 
-  $result->{_invalid} = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
-  $self->write_json("cache/$self->{empire_name}/building/$yard_id/buildable", buildable => $result);
+  my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
+  $self->cache_write( type => 'buildable', id => $yard_id, data => $result, invalid => $invalid );
   return $result;
 }
 
@@ -597,15 +608,76 @@ sub trade_push {
 
   my $result = $self->call(trade => push_items => $building_id, $target_id, $items, $options);
   if ($result) {
-    unlink("cache/$self->{empire_name}/body/$target_id/status");
+    $self->cache_invalidate( type => 'body_status', id => $target_id );
     for my $body ($target_id, $result->{status}{body}{id}) {
       my $buildings = $self->body_buildings($body);
       for my $id (keys %{$buildings->{buildings}}) {
-        unlink("cache/$self->{empire_name}/building/$id/view_all_ships");
+        $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $id );
       }
     }
   }
   return $result;
+}
+
+{
+    my %path_for = (
+        empire_status                => 'empire/status',
+        body_status                  => 'body/%d/status',
+        buildings                    => 'body/%d/buildings',
+        buildable                    => 'body/%d/buildable',
+        building_view                => 'building/%d/view',
+        building_stats               => 'building/%d/stats_%d',
+        spaceport_view_all_ships     => 'building/%d/view_all_ships',
+        observatory_get_probed_stars => 'building/%d/get_probed_stars',
+        shipyard_view_build_queue    => 'building/%d/view_build_queue',
+        session                      => 'session',
+    );
+
+    sub _cache_path {
+        my ($self, $type, $id, $level) = @_;
+
+        my ($host) = ( $self->{uri} =~ m|^\w+://(\w+)\.lacunaexpanse\.com$|i );
+        return sprintf "cache/%s@%s/$path_for{ $type }", grep { defined $_ } $self->{empire_name}, $host, $id, $level;
+    }
+}
+
+sub cache_read {
+    my ($self, %args) = @_;
+
+    my $result = $self->read_json( $self->_cache_path( $args{type}, $args{id}, $args{level} ) );
+
+    # short-circuit
+    return unless $result;
+
+    my $now = time();
+    if (
+        ($result->{_invalid} && ( $result->{_invalid} < $now ))                     # cache expired
+        or                                                                          # or
+        ($result->{_time}    && ( $result->{_time}    <= ( $now - $args{stale} ) )) # cache is stale
+    ) {
+        unlink $self->_cache_path( $args{type}, $args{id}, $args{level} );
+        return;
+    }
+
+    return $result;
+}
+
+sub cache_write {
+    my ($self, %args) = @_;
+
+    $args{data}{_time} = time();
+    $args{data}{_invalid} = $args{invalid} if $args{invalid};
+
+    my $cache_file = $self->_cache_path( $args{type}, $args{id}, $args{level} );
+    $self->write_json( $cache_file , $args{type}, $args{data} );
+
+    return;
+}
+
+sub cache_invalidate {
+    my ($self, %args) = @_;
+    unlink $self->_cache_path( $args{type}, $args{id} );
+    return;
 }
 
 1;
