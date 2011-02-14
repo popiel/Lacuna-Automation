@@ -55,8 +55,6 @@ close $file;
 
 my $buildable;
 my $abort;
-my $rebuild;
-my $requeue;
 for my $j ($[..$#queue) {
   exit(0) if $abort;
   my $command = $queue[$j];
@@ -66,6 +64,8 @@ for my $j ($[..$#queue) {
   $quiet = 1 if $command =~ s/^\-//;
   $abort = 1 if $command =~ s/^\!//;
   my $priority = ($abort) ? '!' : '';
+  my $rebuild;
+  my $requeue;
   $rebuild = 1 if $command =~ s/^\+\+//;
   $requeue = 1 if $command =~ s/^\+//;
   my $sleepy = (localtime())[1] % 30;
