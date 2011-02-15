@@ -13,14 +13,60 @@ use Data::Dumper;
 use Getopt::Long;
 
 use Client;
-use Tools  qw( normalize_planet );
+use Tools  qw( :all );
 
 autoflush STDOUT 1;
 autoflush STDERR 1;
 
-my %opts;
+our $usage = qq{
+Usage: $0 [options]
+
+This script attempts to maintain waste levels within your specified parameters,
+sustaining a minimum amount of waste for your waste consuming planets and
+keeping waste below a maximum percentage of your storage. It adapts to the
+capacity and production levels for each planet.
+
+When waste production is negative, it will dump resources in a balanced manner
+to bring down the most abundant resource down first to generate waste. For
+resources that have subtypes (food and ore), this balancing extends to the
+subtypes.
+
+When waste production is positive, it will attempt to bring the amount of
+stored waste below the maximum percentage of storage by using scows to dump
+waste in the local star and then by recycling waste into usable resources.
+Recycling is done in batches to take an --iteration's worth of time, if run
+in continuous mode, or 10 minutes' worth of time if it is a single run.
+
+It reports its actions so you can always see what it has done.
+
+Options:
+    --config <empire.json>    - JSON configuration file for empire login
+    --dry-run                 - Do not take any real action. Useful for testing
+                                options to see how different combinations will
+                                affect behavior
+    --help                    - Prints this help message
+    --quiet                   - Suppresses most output (TODO)
+    --verbose                 - Provides additional information about how decisions
+                                are made
+    --planet <p1[,p2,...]>    - List of planets to run against
+    --interval <minutes>      - Minuts to sleep between runs. Also controls recycle
+                                center batches
+    --keep-hours <hours>      - Minimum number of hours of waste to keep. This uses
+                                the planet's waste per hour metric to determine the
+                                minimum amount of waste to keep.
+    --keep-units <units>      - Minimum amount of waste to keep.
+    --min-percent <.00>       - Minimum percentage of waste storage to keep filled.
+                                This uses the planet's waste storage capacity to
+                                calculate the minimum amount of waste to keep.
+    --max-percent <.00>       - Maximum percentage of waste storage to keep filled.
+                                This uses the planet's waste storage capacity to
+                                calculate the maximum amount of waste to keep.
+};
+
+our %opts;
 GetOptions(\%opts,
     'config|c=s',
+    'debug|d!',
     'dry-run|n',
     'help|h!',
     'quiet|q!',
@@ -31,13 +77,13 @@ GetOptions(\%opts,
     'keep-units|ku=f',
     'min-percent|min=f',
     'max-percent|max=f',
-) or die usage();
+) or usage();
 
-die usage() if $opts{help};
+usage() if $opts{help};
 
 # Ensure we have some kind of threshold
 unless ( grep { $opts{$_} } qw( keep-hours keep-kilos min-percent max-percent ) ) {
-    die usage();
+    usage();
 }
 
 # check for list of planets to work on
@@ -131,52 +177,6 @@ do {
 
 exit(0);
 
-sub usage {
-    return qq{
-Usage: $0 [options]
-
-This script attempts to maintain waste levels within your specified parameters,
-sustaining a minimum amount of waste for your waste consuming planets and
-keeping waste below a maximum percentage of your storage. It adapts to the
-capacity and production levels for each planet.
-
-When waste production is negative, it will dump resources in a balanced manner
-to bring down the most abundant resource down first to generate waste. For
-resources that have subtypes (food and ore), this balancing extends to the
-subtypes.
-
-When waste production is positive, it will attempt to bring the amount of
-stored waste below the maximum percentage of storage by using scows to dump
-waste in the local star and then by recycling waste into usable resources.
-Recycling is done in batches to take an --iteration's worth of time, if run
-in continuous mode, or 10 minutes' worth of time if it is a single run.
-
-It reports its actions so you can always see what it has done.
-
-Options:
-    --config <empire.json>    - JSON configuration file for empire login
-    --dry-run                 - Do not take any real action. Useful for testing
-                                options to see how different combinations will
-                                affect behavior
-    --help                    - Prints this help message
-    --quiet                   - Suppresses most output (TODO)
-    --verbose                 - Provides additional information about how decisions
-                                are made
-    --planet <p1[,p2,...]>    - List of planets to run against
-    --interval <minutes>      - Minuts to sleep between runs. Also controls recycle
-                                center batches
-    --keep-hours <hours>      - Minimum number of hours of waste to keep. This uses
-                                the planet's waste per hour metric to determine the
-                                minimum amount of waste to keep.
-    --keep-units <units>      - Minimum amount of waste to keep.
-    --min-percent <.00>       - Minimum percentage of waste storage to keep filled.
-                                This uses the planet's waste storage capacity to
-                                calculate the minimum amount of waste to keep.
-    --max-percent <.00>       - Maximum percentage of waste storage to keep filled.
-                                This uses the planet's waste storage capacity to
-                                calculate the maximum amount of waste to keep.
-};
-}
 
 sub make_waste {
     my ($s, $limit) = @_;
@@ -200,12 +200,12 @@ sub make_waste {
     # only consider resources that we can dump
     my %resources = map { $_ => $s->{"${_}_stored"} } keys %seen;
 
-    verbose( 'current resources: ', Dumper( \%resources ) );
+    debug( 'current resources: ', Dumper( \%resources ) );
 
     my %resource_dump = proportionalize( $limit, \%resources );
-    verbose("proportionalized dump: ",Dumper( \%resource_dump ) );
+    debug("proportionalized dump: ",Dumper( \%resource_dump ) );
 
-    verbose('storage facilities: ',Dumper(\%storage_facilities));
+    debug('storage facilities: ',Dumper(\%storage_facilities));
     dump_resource( $storage_facilities{$_}, $_, $resource_dump{ $_ } ) for ( keys %resource_dump );
     $client->cache_invalidate( type => 'body_status', id => $s->{id} );
 }
@@ -213,7 +213,7 @@ sub make_waste {
 sub dump_resource {
     my ($building, $type, $amount) = @_;
 
-    verbose( 'building: ',Dumper( $building ) );
+    debug( 'building: ',Dumper( $building ) );
     output("Dump $amount units of $type");
     given ($type) {
         when ('energy') {
@@ -293,7 +293,7 @@ sub proportionalize {
         $amount = int( ( $amount ) / scalar keys %dump_amount )||1;
         $dump_amount{ $_ } += $amount for keys %dump_amount;
 
-        verbose( "current split: ",Dumper(\%dump_amount) );
+        debug( "current split: ",Dumper(\%dump_amount) );
         if ( (my $dumped = sum( values %dump_amount )) >= $limit ) { # we've dumped enough waste
             verbose("accumulated dump amount: $dumped; done");
             # we're done
@@ -307,16 +307,6 @@ sub proportionalize {
     }
 
     return %dump_amount;
-}
-
-sub verbose {
-    return unless $opts{verbose};
-    output(' -- ',@_);
-}
-
-sub output {
-    return if $opts{quiet};
-    print scalar(localtime),': ',@_,"\n";
 }
 
 sub scow_dump {
