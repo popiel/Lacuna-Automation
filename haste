@@ -295,6 +295,9 @@ sub proportionalize {
         # How much do we have between our current type and the next most plentiful type?
         my $diff = $resources->{ $types[$ii] } - $resources->{ $types[$ii + 1] };
         verbose( "diff between $types[$ii] and $types[$ii + 1] is $diff" );
+        # jump to the next resource if difference is 0
+        next unless $diff;
+
         # If that difference is greater than what we still need to dump, only dump
         # what we still need to in order to hit the limit
         my $amount = ( $diff > $remainder ) ? $remainder : $diff;
@@ -314,6 +317,12 @@ sub proportionalize {
             $remainder = $limit - $dumped;
             verbose("accumulated dump amount: $dumped; $remainder units remaining to be dumped");
         }
+    }
+
+    if ( 0 == sum( values %dump_amount ) ) {
+        verbose( "Looks like you have equal amounts of all resources; evenly splitting total dump amount" );
+        my $amount = int( ( $limit ) / scalar keys %dump_amount )||1;
+        $dump_amount{ $_ } += $amount for keys %dump_amount;
     }
 
     return %dump_amount;
