@@ -54,6 +54,12 @@ Options:
     --planet <p1[,p2,...]>    - List of planets to run against
     --interval <minutes>      - Minuts to sleep between runs. Also controls recycle
                                 center batches
+    --recycle-balanced        - Forces haste to recycle balanced amounts between all
+                                resources
+    --recycle-by-amount       - Recycling focuses on the resource with the smallest
+                                amount stored at the time of recycling.
+    --recycle-by-rate         - Recycling focuses on the resource with the slowest
+                                production rate
     --keep-hours <hours>      - Minimum number of hours of waste to keep. This uses
                                 the planet's waste per hour metric to determine the
                                 minimum amount of waste to keep.
@@ -87,6 +93,9 @@ sub Main {
         'keep-units|ku=f',
         'min-percent|min=f',
         'max-percent|max=f',
+        'recycle-balanced|rb',
+        'recycle-by-amount|ra',
+        'recycle-by-rate|rr',
     ) or usage();
 
     usage() if $opts{help};
@@ -382,35 +391,78 @@ sub recycle {
         sort { $b->{level} <=> $a->{level} }
         grep { $_->{name} eq "Waste Recycling Center" }
         @buildings;
+    verbose( "We have @{[ scalar @centers || 0 ]} recycling centers on this planet." );
 
-    for my $center (@centers) {
-        next if $center->{work};
-        my $view = $client->building_view($center->{url}, $center->{id});
-        my $waste = int List::Util::min(
-            ((($opts{interval}||10)*60) - 30) / $view->{recycle}{seconds_per_resource},
-            $client->body_status($s->{id})->{'waste_stored'});
-        verbose("recycling $waste units of waste into new resources at center $center->{id}");
-
-        my %res;
-        my $sum = 0;
-        for my $res (qw(ore water energy)) {
-            $res{$res} =
-                $client->body_status($s->{id})->{"${res}_capacity"} -
-                $client->body_status($s->{id})->{"${res}_stored"}   + 1;
-            $sum += $res{$res};
-            verbose("we can hold $res{$res} more units of $res");
-        }
-
-        my %recycle_now;
-        for my $res (qw(ore water energy)) {
-            $recycled{$res} += $recycle_now{$res} = int($res{$res} * $waste / $sum);
-            verbose("we want to make $res{$res} units of $res");
-            $client->body_status($s->{id})->{"${res}_stored"} -= $recycled{$res};
-        }
-
-        $client->recycle_recycle($center->{id}, $recycle_now{water}, $recycle_now{ore}, $recycle_now{energy})
-            unless $opts{'dry-run'};
-        output("Recycled for $recycled{ore} ore, $recycled{water} water, and $recycled{energy} energy.");
+    unless ( scalar @centers ) {
+        output( "No recycling centers; nothing to do." );
+        return \%recycled;
     }
+
+    my $left_to_recycle = $amount;
+    for my $center (@centers) {
+        if ( $left_to_recycle <= 0 ) {
+            verbose( "Already recycled $amount; nothing left to recycle." );
+            last;
+        }
+
+        if ( $center->{work} ) {
+            verbose( "recycling center $center->{id} is busy; skipping\n" );
+            next;
+        }
+
+        my $view = $client->building_view($center->{url}, $center->{id});
+        my $recycle_capacity = int List::Util::min(
+            ( ( ( ($opts{interval}||10) * 60 ) - 30 ) / $view->{recycle}{seconds_per_resource} ),
+            $left_to_recycle,
+            $client->body_status($s->{id})->{'waste_stored'}
+        );
+        verbose("recycling $recycle_capacity units of waste into new resources at center $center->{id}");
+
+        # pull our resource info out
+        my $resources;
+        for my $res ( @owe ) {
+            for my $stat ( qw( hour stored capacity ) ) {
+                $resources->{"${res}_${stat}"} = $s->{"${res}_${stat}"};
+            }
+        }
+
+        # determine what we want to make (hint: don't make it if it would excede capacity)
+        my %producing = map { $_ => ( $resources->{ "${_}_capacity" } > $resources->{ "${_}_stored" } + 1 ) } @owe;
+        my $production_count = sum( values %producing );
+        unless ( $production_count ) {
+            verbose("All storage is full. Falling back to balanced recycling.");
+            $production_count = scalar @owe;
+            @producing{ @owe } = (1) x $production_count;
+        }
+
+        my %recycle;
+        if ( $opts{'recycle-by-rate'} ) {
+            my ($focus) = sort { $resources->{ "${a}_hour" } <=> $resources->{ "${b}_hour" } } @owe;
+            $recycle{ $focus } = $recycle_capacity;
+        }
+        elsif ( $opts{'recycle-by-amount'} ) {
+            my ($focus) =
+                map  { $_->[0] }
+                sort { $a->[1] <=> $b->[1] }
+                map  { [ $_ => ($resources->{"${_}_stored"}/$resources->{"${_}_capacity"}) ] }
+                grep { $producing{ $_ } }
+                @owe;
+            $recycle{ $focus } = $recycle_capacity;
+        }
+        else { # default to balanced recycling
+            %recycle = map  { $_ => int( $recycle_capacity / $production_count ) * $producing{$_}||0 } @owe;
+        }
+
+        for my $res ( @owe ) {
+            verbose("we want to make $recycle{$res} units of $res");
+            $recycled{ $res } += $recycle{ $res };
+        }
+
+        $client->recycle_recycle($center->{id}, $recycle{water}, $recycle{ore}, $recycle{energy})
+            unless $opts{'dry-run'};
+        output("Recycled for $recycle{ore} ore, $recycle{water} water, and $recycle{energy} energy.");
+        $left_to_recycle -= $recycle_capacity;
+    }
+    # TODO $self->cache_invalidate( type => 'body_status', id => $s->{id} );
     return \%recycled;
 }
