@@ -18,6 +18,9 @@ use Tools  qw( :all );
 autoflush STDOUT 1;
 autoflush STDERR 1;
 
+my @owe = qw( ore water energy ); # We'll repeat this a lot
+
+our %opts;
 our $usage = qq{
 Usage: $0 [options]
 
@@ -63,120 +66,127 @@ Options:
                                 calculate the maximum amount of waste to keep.
 };
 
-our %opts;
-GetOptions(\%opts,
-    'config|c=s',
-    'debug|d!',
-    'dry-run|n',
-    'help|h!',
-    'quiet|q!',
-    'verbose|v!',
-    'planet|p=s@',
-    'interval|i|s|sleep=i',
-    'keep-hours|kh=f',
-    'keep-units|ku=f',
-    'min-percent|min=f',
-    'max-percent|max=f',
-) or usage();
+my $client;
 
-usage() if $opts{help};
-
-# Ensure we have some kind of threshold
-unless ( grep { $opts{$_} } qw( keep-hours keep-kilos min-percent max-percent ) ) {
-    usage();
-}
-
-# check for list of planets to work on
-my %do_planets;
-if ($opts{planet}) {
-    %do_planets = map { normalize_planet($_) => 1 } @{$opts{planet}};
-}
-
-# instantiate the client and get initial status
-my $config = $opts{config} || shift @ARGV || 'config.json' ;
-my $client = Client->new(config => $config);
-my $empire = $client->empire_status();
-
-# Take $empire->{planets} and turn it inside-out, but cross-reference %do_planets to
-# 1) get a hash of only the planets we care about; or
-# 2) get a hash of *all* planets
-my $grep = ( scalar keys %do_planets )
-    ? sub { exists $do_planets{ normalize_planet( $empire->{planets}{$_} ) } }
-    : sub { 1 }
-;
-my %planets =
-        map  { $empire->{planets}{$_} => $_ }
-        grep { $grep->($_) }
-        keys %{ $empire->{planets} }
-;
-
-# If we have a list of planets to work on, we only want to do those planets; otherwise, we do all planets.
-%do_planets = map {  $empire->{planets}{$_}, $_ } keys %{$empire->{planets}} unless ( keys %do_planets );
-
-do {
-    for my $planet_name ( keys %do_planets ) {
-        output("Checking waste stores on $planet_name");
-
-        my $s = $client->body_status($planets{$planet_name});
-
-        # use opts to determine the largest minimum waste / smallest maximum waste threshholds
-        my $minimum_waste = max(
-            ( $opts{'keep-hours'}  ? abs( $s->{waste_hour}     * $opts{'keep-hours'}  ) : () ),
-            ( $opts{'keep-units'}  ? $opts{'keep-units'}                                : () ),
-            ( $opts{'min-percent'} ? int( $s->{waste_capacity} * $opts{'min-percent'} ) : () ),
-            0
-        );
-        my $maximum_waste =
-            ( $opts{'max-percent'} )
-                ? int( $s->{waste_capacity} * $opts{'max-percent'} )
-                : $s->{waste_capacity}
-        ;
-
-        verbose("keeping waste between $minimum_waste and $maximum_waste units");
-        if ($s->{waste_hour} < 0) { # we're burning waste
-            output("Waste rate is negative (-)");
-
-            my $hours_left = sprintf('%0.2f', -1 * $s->{waste_stored} / $s->{waste_hour});
-            output("We have $hours_left hours ($s->{waste_stored} units) of waste stored");
-        }
-        elsif ($s->{waste_hour} > 0) { # we are making waste already
-            output("Waste rate is positive (+)");
-
-            my $hours_full = sprintf('%0.2f',
-                ( $s->{waste_capacity} - $s->{waste_stored} ) / $s->{waste_hour}
-            );
-            output("$hours_full hours until waste is full; currently at $s->{waste_stored} units");
-        }
-        else {
-            output("You have attained waste zen.");
-        }
-
-        if ( $s->{waste_stored} < $minimum_waste ) {
-            verbose("We have less than our threshold of $minimum_waste units of waste");
-            make_waste( $s, $minimum_waste - $s->{waste_stored} );
-        }
-        elsif ( $s->{waste_stored} > $maximum_waste ) {
-            verbose( "More than $maximum_waste stored; disposing of some" );
-            waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
-        }
-        else {
-            verbose("Stored waste is currently 'in-the-zone'. Do nothing.");
-        }
-
-        output("$planet_name ... done");
-        # grab the buildings on this planet
-        my $building_status = $client->body_buildings($planets{$planet_name});
-        my $buildings = $building_status->{buildings};
-    }
-    output(
-        scalar(localtime(time)),
-        ' All planets are done.',
-        ($opts{interval}?" Sleeping $opts{interval} minutes":''),
-    );
-} while ( $opts{interval} && sleep( $opts{interval} * 60 ) );
+Main( @ARGV );
 
 exit(0);
 
+sub Main {
+    local @ARGV = @_;
+    GetOptions(\%opts,
+        'config|c=s',
+        'debug|d!',
+        'dry-run|n',
+        'help|h!',
+        'quiet|q!',
+        'verbose|v!',
+        'planet|p=s@',
+        'interval|i|s|sleep=i',
+        'keep-hours|kh=f',
+        'keep-units|ku=f',
+        'min-percent|min=f',
+        'max-percent|max=f',
+    ) or usage();
+
+    usage() if $opts{help};
+
+    # Ensure we have some kind of threshold
+    unless ( grep { $opts{$_} } qw( keep-hours keep-kilos min-percent max-percent ) ) {
+        usage();
+    }
+
+    # check for list of planets to work on
+    my %do_planets;
+    if ($opts{planet}) {
+        %do_planets = map { normalize_planet($_) => 1 } @{$opts{planet}};
+    }
+
+    # instantiate the client and get initial status
+    my $config = $opts{config} || shift @ARGV || 'config.json' ;
+    $client = Client->new(config => $config);
+    my $empire = $client->empire_status();
+
+    # Take $empire->{planets} and turn it inside-out, but cross-reference %do_planets to
+    # 1) get a hash of only the planets we care about; or
+    # 2) get a hash of *all* planets
+    my $grep = ( keys %do_planets )
+        ? sub { exists $do_planets{ normalize_planet( $empire->{planets}{$_} ) } }
+        : sub { 1 }
+    ;
+    my %planets =
+            map  { $empire->{planets}{$_} => $_ }
+            grep { $grep->($_) }
+            keys %{ $empire->{planets} }
+    ;
+
+    # If we have a list of planets to work on, we only want to do those planets; otherwise, we do all planets.
+    %do_planets = map {  $empire->{planets}{$_}, $_ } keys %{$empire->{planets}} unless ( keys %do_planets );
+
+    do {
+        for my $planet_name ( keys %do_planets ) {
+            output("Checking waste stores on $planet_name");
+
+            my $s = $client->body_status($planets{$planet_name});
+
+            # use opts to determine the largest minimum waste / smallest maximum waste threshholds
+            my $minimum_waste = max(
+                ( $opts{'keep-hours'}  ? abs( $s->{waste_hour}     * $opts{'keep-hours'}  ) : () ),
+                ( $opts{'keep-units'}  ? $opts{'keep-units'}                                : () ),
+                ( $opts{'min-percent'} ? int( $s->{waste_capacity} * $opts{'min-percent'} ) : () ),
+                0
+            );
+            my $maximum_waste =
+                ( $opts{'max-percent'} )
+                    ? int( $s->{waste_capacity} * $opts{'max-percent'} )
+                    : $s->{waste_capacity}
+            ;
+
+            verbose("keeping waste between $minimum_waste and $maximum_waste units");
+            if ($s->{waste_hour} < 0) { # we're burning waste
+                output("Waste rate is negative (-)");
+
+                my $hours_left = sprintf('%0.2f', -1 * $s->{waste_stored} / $s->{waste_hour});
+                output("We have $hours_left hours ($s->{waste_stored} units) of waste stored");
+            }
+            elsif ($s->{waste_hour} > 0) { # we are making waste already
+                output("Waste rate is positive (+)");
+
+                my $hours_full = sprintf('%0.2f',
+                    ( $s->{waste_capacity} - $s->{waste_stored} ) / $s->{waste_hour}
+                );
+                output("$hours_full hours until waste is full; currently at $s->{waste_stored} units");
+            }
+            else {
+                output("You have attained waste zen.");
+            }
+
+            if ( $s->{waste_stored} < $minimum_waste ) {
+                verbose("We have less than our threshold of $minimum_waste units of waste");
+                make_waste( $s, $minimum_waste - $s->{waste_stored} );
+            }
+            elsif ( $s->{waste_stored} > $maximum_waste ) {
+                verbose( "More than $maximum_waste stored; disposing of some" );
+                waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
+            }
+            else {
+                verbose("Stored waste is currently 'in-the-zone'. Do nothing.");
+            }
+
+            output("$planet_name ... done");
+            # grab the buildings on this planet
+            my $building_status = $client->body_buildings($planets{$planet_name});
+            my $buildings = $building_status->{buildings};
+        }
+        output(
+            scalar(localtime(time)),
+            ' All planets are done.',
+            ($opts{interval}?" Sleeping $opts{interval} minutes":''),
+        );
+    } while ( $opts{interval} && sleep( $opts{interval} * 60 ) );
+
+    return;
+}
 
 sub make_waste {
     my ($s, $limit) = @_;
