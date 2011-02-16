@@ -435,7 +435,8 @@ sub recycle {
             @producing{ @owe } = (1) x $production_count;
         }
 
-        my %recycle;
+        #initialize our hash
+        my %recycle = map { $_ => 0 } @owe;
         if ( $opts{'recycle-by-rate'} ) {
             my ($focus) = sort { $resources->{ "${a}_hour" } <=> $resources->{ "${b}_hour" } } @owe;
             $recycle{ $focus } = $recycle_capacity;
