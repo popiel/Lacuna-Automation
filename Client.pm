@@ -653,7 +653,7 @@ sub cache_read {
     if (
         ($result->{_invalid} && ( $result->{_invalid} < $now ))                     # cache expired
         or                                                                          # or
-        ($result->{_time}    && ( $result->{_time}    <= ( $now - $args{stale} ) )) # cache is stale
+        ($args{stale}        && ( $result->{_time}    <= ( $now - $args{stale} ) )) # cache is stale
     ) {
         unlink $self->_cache_path( $args{type}, $args{id}, $args{level} );
         return;
