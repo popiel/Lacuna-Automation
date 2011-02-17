@@ -105,11 +105,11 @@ for my $j ($[..$#queue) {
       emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
       splice(@queue, $j, 1);
       if ($rebuild) {
-        emit("Upgrading $name at the front of the queue");
+        emit("Requeueing $name at the front of the queue");
         unshift(@queue, "$priority++upgrade 1 $name\n");
       }
       elsif ($requeue) {
-        emit("Upgrading $name at the back of the queue\n");
+        emit("Requeueing $name at the back of the queue\n");
         push(@queue, "+upgrade 1 $name");
       }
       @queue = map { s/^\-//; $_; } @queue;
@@ -138,11 +138,11 @@ for my $j ($[..$#queue) {
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
         splice(@queue, $j, 1);
         if ($rebuild) {
-          emit("Upgrading $name at the front of the queue");
+          emit("Requeueing $name at the front of the queue");
           unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, $level + 1, $name));
         }
         elsif ($requeue) {
-          emit("Upgrading $name at the back of the queue");
+          emit("Requeueing $name at the back of the queue");
           push(@queue, sprintf("+upgrade %s %s\n", $level + 1, $name));
         }
         @queue = map { s/^\-//; $_; } @queue;
