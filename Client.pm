@@ -476,7 +476,7 @@ sub port_all_ships {
   my $self = shift;
   my $building_id = shift;
 
-  my $result = $self->cache_read( type => 'spaceport_view_all_ships', id => $building_id );
+  my $result = $self->cache_read( type => 'spaceport_view_all_ships', id => $building_id, stale => 3600 );
   return $result if $result;
 
   my $page = 1;
@@ -497,7 +497,7 @@ sub port_all_ships {
     push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
   }
   my $invalid = List::Util::min(time() + 3600, @completions);
-  $self->cache_write( type => 'spaceport_view_all_ships', id => $building_id, data => $result );
+  $self->cache_write( type => 'spaceport_view_all_ships', id => $building_id, data => $result, invalid => $invalid );
   return $result;
 }
 
