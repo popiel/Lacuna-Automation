@@ -40,10 +40,15 @@ build_queue [--body Name] [--queue Name]
   resources <options>
     Upgrade resources, picking whichever resource (food, ore, water, energy)
     is most needed, and upgrading the building with the greatest payoff in
-    resource/time investment.
+    resource/time investment.  If storage space is running low, then it will
+    upgrade storage, too.
     Options are a comma separated list of:
       max level <level>       : don't upgrade beyond given level
       <count>x<building name> : maximum number of building type that should be maintained
+
+    Building priority is actually equalizing storage building levels, then
+    upgrading storage if within 95% of capacity, then upgrading resource
+    production.
 
     Note that the resources command will only upgrade buildings; it will not
     build new ones.

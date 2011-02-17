@@ -162,15 +162,64 @@ for my $j ($[..$#queue) {
       $max_level = $1 if $arg =~ /max level (\d+)/;
     }
 
+    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @storage = sort { $a->{level} <=> $b->{level} || $b->{name} cmp $a->{name} }
+                  grep { $_->{name} =~ /^(Ore|Water|Food|Energy) (Storage|Reserve)/ }
+                  @buildings;
+    if ($storage[0]{level} < $storage[$#storage]{level}) {
+      emit("Equalizing storage levels") unless $quiet && $sleepy;
+      my $building = $storage[0];
+      my $view = $client->building_view($building->{url}, $building->{id})->{building};
+      unless ($view->{upgrade}{can}) {
+        emit("Cannot upgrade $building->{level} $building->{name}: $view->{upgrade}{reason}[1]") unless $quiet && $sleepy;
+        if ($queue[$j] !~ /^\-/) {
+          splice(@queue, $j, 1, "-$queue[$j]");
+          write_queue();
+        }
+        next;
+      }
+      else {
+        my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+        emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+        @queue = map { s/^\-//; $_; } @queue;
+        write_queue();
+        exit(0);
+      }
+    }
+
     my $status = $client->body_status($body_id);
     my %ratio;
     for my $type (qw(food ore water energy)) {
       $ratio{$type} = $status->{"${type}_stored"} / $status->{"${type}_capacity"};
     }
-    my $type = (sort { $ratio{$a} <=> $ratio{$b} } keys %ratio)[0];
+    my $type = (sort { $ratio{$b} <=> $ratio{$a} } keys %ratio)[0];
+    if ($ratio{$type} > 0.95) {
+      emit("Near storage limit for $type") unless $quiet && $sleepy;
+      my @storage = sort { $a->{level} <=> $b->{level} }
+                    grep { $_->{name} =~ /^$type (Storage|Reserve)/i }
+                    @buildings;
+      my $building = $storage[0];
+      my $view = $client->building_view($building->{url}, $building->{id})->{building};
+      unless ($view->{upgrade}{can}) {
+        emit("Cannot upgrade $building->{level} $building->{name}: $view->{upgrade}{reason}[1]") unless $quiet && $sleepy;
+        if ($queue[$j] !~ /^\-/) {
+          splice(@queue, $j, 1, "-$queue[$j]");
+          write_queue();
+        }
+        next;
+      }
+      else {
+        my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+        emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+        @queue = map { s/^\-//; $_; } @queue;
+        write_queue();
+        exit(0);
+      }
+    }
+
+    $type = (sort { $ratio{$a} <=> $ratio{$b} } keys %ratio)[0];
     emit("Want to upgrade $type production") unless $quiet && $sleepy;
 
-    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
     @buildings = sort { $b->{level} <=> $a->{level} } @buildings;
     my @pruned;
     for my $building (@buildings) {
