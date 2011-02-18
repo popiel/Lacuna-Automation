@@ -272,7 +272,7 @@ sub body_buildable {
     push(@completions, map { parse_time($_->{date_arrives}) } @{$body->{incoming_foreign_ships}});
   }
   my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
-  $self->cache_write( type => 'buildable', id => $body, invalid => $invalid, data => $result );
+  $self->cache_write( type => 'buildable', id => $body_id, invalid => $invalid, data => $result );
   return $result;
 }
 
@@ -637,7 +637,7 @@ sub trade_push {
         my ($self, $type, $id, $level) = @_;
 
         my ($host) = ( $self->{uri} =~ m|^\w+://(\w+)\.lacunaexpanse\.com$|i );
-        return sprintf "cache/%s@%s/$path_for{ $type }", grep { defined $_ } $self->{empire_name}, $host, $id, $level;
+        return sprintf "cache/%s_%s/$path_for{ $type }", grep { defined $_ } $self->{empire_name}, $host, $id, $level;
     }
 }
 
