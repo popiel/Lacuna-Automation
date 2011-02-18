@@ -107,8 +107,13 @@ distribute($client->body_status($body_id[0])->{ore_capacity},
            @ores);
 distribute($client->body_status($body_id[0])->{water_capacity }, 0, "water");
 distribute($client->body_status($body_id[0])->{energy_capacity}, 0, "energy");
-$desire{waste} = List::Util::min($client->body_status($body_id[0])->{waste_stored},
-                                 $client->body_status($body_id[0])->{waste_capacity} * 3 / 4);
+if ($equalize) {
+  distribute($client->body_status($body_id[0])->{waste_capacity}, 0, "waste");
+}
+else {
+  $desire{waste} = List::Util::min($client->body_status($body_id[0])->{waste_stored},
+                                   $client->body_status($body_id[0])->{waste_capacity} * 3 / 4);
+}
 
 sub distribute {
   my $capacity = shift;
