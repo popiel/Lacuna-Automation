@@ -13,126 +13,15 @@ use Data::Dumper;
 use Getopt::Long;
 
 use Client;
-use Tools  qw( normalize_planet );
+use Tools  qw( :all );
 
 autoflush STDOUT 1;
 autoflush STDERR 1;
 
-my %opts;
-GetOptions(\%opts,
-    'config|c=s',
-    'dry-run|n',
-    'help|h!',
-    'quiet|q!',
-    'verbose|v!',
-    'planet|p=s@',
-    'interval|i|s|sleep=i',
-    'keep-hours|kh=f',
-    'keep-units|ku=f',
-    'min-percent|min=f',
-    'max-percent|max=f',
-) or die usage();
+my @owe = qw( ore water energy ); # We'll repeat this a lot
 
-die usage() if $opts{help};
-
-# Ensure we have some kind of threshold
-unless ( grep { $opts{$_} } qw( keep-hours keep-kilos min-percent max-percent ) ) {
-    die usage();
-}
-
-# check for list of planets to work on
-my %do_planets;
-if ($opts{planet}) {
-    %do_planets = map { normalize_planet($_) => 1 } @{$opts{planet}};
-}
-
-# instantiate the client and get initial status
-my $config = $opts{config} || shift @ARGV || 'config.json' ;
-my $client = Client->new(config => $config);
-my $empire = $client->empire_status();
-
-# Take $empire->{planets} and turn it inside-out, but cross-reference %do_planets to
-# 1) get a hash of only the planets we care about; or
-# 2) get a hash of *all* planets
-my $grep = ( scalar keys %do_planets )
-    ? sub { exists $do_planets{ normalize_planet( $empire->{planets}{$_} ) } }
-    : sub { 1 }
-;
-my %planets =
-        map  { $empire->{planets}{$_} => $_ }
-        grep { $grep->($_) }
-        keys %{ $empire->{planets} }
-;
-
-# If we have a list of planets to work on, we only want to do those planets; otherwise, we do all planets.
-%do_planets = map {  $empire->{planets}{$_}, $_ } keys %{$empire->{planets}} unless ( keys %do_planets );
-
-do {
-    for my $planet_name ( keys %do_planets ) {
-        output("Checking waste stores on $planet_name");
-
-        my $s = $client->body_status($planets{$planet_name});
-
-        # use opts to determine the largest minimum waste / smallest maximum waste threshholds
-        my $minimum_waste = max(
-            ( $opts{'keep-hours'}  ? abs( $s->{waste_hour}     * $opts{'keep-hours'}  ) : () ),
-            ( $opts{'keep-units'}  ? $opts{'keep-units'}                                : () ),
-            ( $opts{'min-percent'} ? int( $s->{waste_capacity} * $opts{'min-percent'} ) : () ),
-            0
-        );
-        my $maximum_waste =
-            ( $opts{'max-percent'} )
-                ? int( $s->{waste_capacity} * $opts{'max-percent'} )
-                : $s->{waste_capacity}
-        ;
-
-        verbose("keeping waste between $minimum_waste and $maximum_waste units");
-        if ($s->{waste_hour} < 0) { # we're burning waste
-            output("Waste rate is negative (-)");
-
-            my $hours_left = sprintf('%0.2f', -1 * $s->{waste_stored} / $s->{waste_hour});
-            output("We have $hours_left hours ($s->{waste_stored} units) of waste stored");
-        }
-        elsif ($s->{waste_hour} > 0) { # we are making waste already
-            output("Waste rate is positive (+)");
-
-            my $hours_full = sprintf('%0.2f',
-                ( $s->{waste_capacity} - $s->{waste_stored} ) / $s->{waste_hour}
-            );
-            output("$hours_full hours until waste is full; currently at $s->{waste_stored} units");
-        }
-        else {
-            output("You have attained waste zen.");
-        }
-
-        if ( $s->{waste_stored} < $minimum_waste ) {
-            verbose("We have less than our threshold of $minimum_waste units of waste");
-            make_waste( $s, $minimum_waste - $s->{waste_stored} );
-        }
-        elsif ( $s->{waste_stored} > $maximum_waste ) {
-            verbose( "More than $maximum_waste stored; disposing of some" );
-            waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
-        }
-        else {
-            verbose("Stored waste is currently 'in-the-zone'. Do nothing.");
-        }
-
-        output("$planet_name ... done");
-        # grab the buildings on this planet
-        my $building_status = $client->body_buildings($planets{$planet_name});
-        my $buildings = $building_status->{buildings};
-    }
-    output(
-        scalar(localtime(time)),
-        ' All planets are done.',
-        ($opts{interval}?" Sleeping $opts{interval} minutes":''),
-    );
-} while ( $opts{interval} && sleep( $opts{interval} * 60 ) );
-
-exit(0);
-
-sub usage {
-    return qq{
+our %opts;
+our $usage = qq{
 Usage: $0 [options]
 
 This script attempts to maintain waste levels within your specified parameters,
@@ -165,6 +54,12 @@ Options:
     --planet <p1[,p2,...]>    - List of planets to run against
     --interval <minutes>      - Minuts to sleep between runs. Also controls recycle
                                 center batches
+    --recycle-balanced        - Forces haste to recycle balanced amounts between all
+                                resources
+    --recycle-by-amount       - Recycling focuses on the resource with the smallest
+                                amount stored at the time of recycling.
+    --recycle-by-rate         - Recycling focuses on the resource with the slowest
+                                production rate
     --keep-hours <hours>      - Minimum number of hours of waste to keep. This uses
                                 the planet's waste per hour metric to determine the
                                 minimum amount of waste to keep.
@@ -176,6 +71,130 @@ Options:
                                 This uses the planet's waste storage capacity to
                                 calculate the maximum amount of waste to keep.
 };
+
+my $client;
+
+Main( @ARGV );
+
+exit(0);
+
+sub Main {
+    local @ARGV = @_;
+    GetOptions(\%opts,
+        'config|c=s',
+        'debug|d!',
+        'dry-run|n',
+        'help|h!',
+        'quiet|q!',
+        'verbose|v!',
+        'planet|p=s@',
+        'interval|i|s|sleep=i',
+        'keep-hours|kh=f',
+        'keep-units|ku=f',
+        'min-percent|min=f',
+        'max-percent|max=f',
+        'recycle-balanced|rb',
+        'recycle-by-amount|ra',
+        'recycle-by-rate|rr',
+    ) or usage();
+
+    usage() if $opts{help};
+
+    # Ensure we have some kind of threshold
+    unless ( grep { $opts{$_} } qw( keep-hours keep-kilos min-percent max-percent ) ) {
+        usage();
+    }
+
+    # check for list of planets to work on
+    my %do_planets;
+    if ($opts{planet}) {
+        %do_planets = map { normalize_planet($_) => 1 } @{$opts{planet}};
+    }
+
+    # instantiate the client and get initial status
+    my $config = $opts{config} || shift @ARGV || 'config.json' ;
+    $client = Client->new(config => $config);
+    my $empire = $client->empire_status();
+
+    # Take $empire->{planets} and turn it inside-out, but cross-reference %do_planets to
+    # 1) get a hash of only the planets we care about; or
+    # 2) get a hash of *all* planets
+    my $grep = ( keys %do_planets )
+        ? sub { exists $do_planets{ normalize_planet( $empire->{planets}{$_} ) } }
+        : sub { 1 }
+    ;
+    my %planets =
+            map  { $empire->{planets}{$_} => $_ }
+            grep { $grep->($_) }
+            keys %{ $empire->{planets} }
+    ;
+
+    # If we have a list of planets to work on, we only want to do those planets; otherwise, we do all planets.
+    %do_planets = map {  $empire->{planets}{$_}, $_ } keys %{$empire->{planets}} unless ( keys %do_planets );
+
+    do {
+        for my $planet_name ( keys %do_planets ) {
+            output("Checking waste stores on $planet_name");
+
+            my $s = $client->body_status($planets{$planet_name});
+
+            # use opts to determine the largest minimum waste / smallest maximum waste threshholds
+            my $minimum_waste = max(
+                ( $opts{'keep-hours'}  ? abs( $s->{waste_hour}     * $opts{'keep-hours'}  ) : () ),
+                ( $opts{'keep-units'}  ? $opts{'keep-units'}                                : () ),
+                ( $opts{'min-percent'} ? int( $s->{waste_capacity} * $opts{'min-percent'} ) : () ),
+                0
+            );
+            my $maximum_waste =
+                ( $opts{'max-percent'} )
+                    ? int( $s->{waste_capacity} * $opts{'max-percent'} )
+                    : $s->{waste_capacity}
+            ;
+
+            verbose("keeping waste between $minimum_waste and $maximum_waste units");
+            if ($s->{waste_hour} < 0) { # we're burning waste
+                output("Waste rate is negative (-)");
+
+                my $hours_left = sprintf('%0.2f', -1 * $s->{waste_stored} / $s->{waste_hour});
+                output("We have $hours_left hours ($s->{waste_stored} units) of waste stored");
+            }
+            elsif ($s->{waste_hour} > 0) { # we are making waste already
+                output("Waste rate is positive (+)");
+
+                my $hours_full = sprintf('%0.2f',
+                    ( $s->{waste_capacity} - $s->{waste_stored} ) / $s->{waste_hour}
+                );
+                output("$hours_full hours until waste is full; currently at $s->{waste_stored} units");
+            }
+            else {
+                output("You have attained waste zen.");
+            }
+
+            if ( $s->{waste_stored} < $minimum_waste ) {
+                verbose("We have less than our threshold of $minimum_waste units of waste");
+                make_waste( $s, $minimum_waste - $s->{waste_stored} );
+            }
+            elsif ( $s->{waste_stored} > $maximum_waste ) {
+                verbose( "More than $maximum_waste stored; disposing of some" );
+                waste_disposal( $s, $s->{waste_stored} - $maximum_waste );
+            }
+            else {
+                verbose("Stored waste is currently 'in-the-zone'. Do nothing.");
+            }
+
+            output("$planet_name ... done");
+            # grab the buildings on this planet
+            my $building_status = $client->body_buildings($planets{$planet_name});
+            my $buildings = $building_status->{buildings};
+        }
+        output(
+            scalar(localtime(time)),
+            ' All planets are done.',
+            ($opts{interval}?" Sleeping $opts{interval} minutes":''),
+        );
+    } while ( $opts{interval} && sleep( $opts{interval} * 60 ) );
+
+    return;
 }
 
 sub make_waste {
@@ -200,12 +219,12 @@ sub make_waste {
     # only consider resources that we can dump
     my %resources = map { $_ => $s->{"${_}_stored"} } keys %seen;
 
-    verbose( 'current resources: ', Dumper( \%resources ) );
+    debug( 'current resources: ', Dumper( \%resources ) );
 
     my %resource_dump = proportionalize( $limit, \%resources );
-    verbose("proportionalized dump: ",Dumper( \%resource_dump ) );
+    debug("proportionalized dump: ",Dumper( \%resource_dump ) );
 
-    verbose('storage facilities: ',Dumper(\%storage_facilities));
+    debug('storage facilities: ',Dumper(\%storage_facilities));
     dump_resource( $storage_facilities{$_}, $_, $resource_dump{ $_ } ) for ( keys %resource_dump );
     $client->cache_invalidate( type => 'body_status', id => $s->{id} );
 }
@@ -213,7 +232,7 @@ sub make_waste {
 sub dump_resource {
     my ($building, $type, $amount) = @_;
 
-    verbose( 'building: ',Dumper( $building ) );
+    debug( 'building: ',Dumper( $building ) );
     output("Dump $amount units of $type");
     given ($type) {
         when ('energy') {
@@ -285,6 +304,9 @@ sub proportionalize {
         # How much do we have between our current type and the next most plentiful type?
         my $diff = $resources->{ $types[$ii] } - $resources->{ $types[$ii + 1] };
         verbose( "diff between $types[$ii] and $types[$ii + 1] is $diff" );
+        # jump to the next resource if difference is 0
+        next unless $diff;
+
         # If that difference is greater than what we still need to dump, only dump
         # what we still need to in order to hit the limit
         my $amount = ( $diff > $remainder ) ? $remainder : $diff;
@@ -293,7 +315,7 @@ sub proportionalize {
         $amount = int( ( $amount ) / scalar keys %dump_amount )||1;
         $dump_amount{ $_ } += $amount for keys %dump_amount;
 
-        verbose( "current split: ",Dumper(\%dump_amount) );
+        debug( "current split: ",Dumper(\%dump_amount) );
         if ( (my $dumped = sum( values %dump_amount )) >= $limit ) { # we've dumped enough waste
             verbose("accumulated dump amount: $dumped; done");
             # we're done
@@ -306,17 +328,13 @@ sub proportionalize {
         }
     }
 
+    if ( 0 == sum( values %dump_amount ) ) {
+        verbose( "Looks like you have equal amounts of all resources; evenly splitting total dump amount" );
+        my $amount = int( ( $limit ) / scalar keys %dump_amount )||1;
+        $dump_amount{ $_ } += $amount for keys %dump_amount;
+    }
+
     return %dump_amount;
-}
-
-sub verbose {
-    return unless $opts{verbose};
-    output(' -- ',@_);
-}
-
-sub output {
-    return if $opts{quiet};
-    print scalar(localtime),': ',@_,"\n";
 }
 
 sub scow_dump {
@@ -373,35 +391,79 @@ sub recycle {
         sort { $b->{level} <=> $a->{level} }
         grep { $_->{name} eq "Waste Recycling Center" }
         @buildings;
+    verbose( "We have @{[ scalar @centers || 0 ]} recycling centers on this planet." );
 
-    for my $center (@centers) {
-        next if $center->{work};
-        my $view = $client->building_view($center->{url}, $center->{id});
-        my $waste = int List::Util::min(
-            ((($opts{interval}||10)*60) - 30) / $view->{recycle}{seconds_per_resource},
-            $client->body_status($s->{id})->{'waste_stored'});
-        verbose("recycling $waste units of waste into new resources at center $center->{id}");
-
-        my %res;
-        my $sum = 0;
-        for my $res (qw(ore water energy)) {
-            $res{$res} =
-                $client->body_status($s->{id})->{"${res}_capacity"} -
-                $client->body_status($s->{id})->{"${res}_stored"}   + 1;
-            $sum += $res{$res};
-            verbose("we can hold $res{$res} more units of $res");
-        }
-
-        my %recycle_now;
-        for my $res (qw(ore water energy)) {
-            $recycled{$res} += $recycle_now{$res} = int($res{$res} * $waste / $sum);
-            verbose("we want to make $res{$res} units of $res");
-            $client->body_status($s->{id})->{"${res}_stored"} -= $recycled{$res};
-        }
-
-        $client->recycle_recycle($center->{id}, $recycle_now{water}, $recycle_now{ore}, $recycle_now{energy})
-            unless $opts{'dry-run'};
-        output("Recycled for $recycled{ore} ore, $recycled{water} water, and $recycled{energy} energy.");
+    unless ( scalar @centers ) {
+        output( "No recycling centers; nothing to do." );
+        return \%recycled;
     }
+
+    my $left_to_recycle = $amount;
+    for my $center (@centers) {
+        if ( $left_to_recycle <= 0 ) {
+            verbose( "Already recycled $amount; nothing left to recycle." );
+            last;
+        }
+
+        if ( $center->{work} ) {
+            verbose( "recycling center $center->{id} is busy; skipping\n" );
+            next;
+        }
+
+        my $view = $client->building_view($center->{url}, $center->{id});
+        my $recycle_capacity = int List::Util::min(
+            ( ( ( ($opts{interval}||10) * 60 ) - 30 ) / $view->{recycle}{seconds_per_resource} ),
+            $left_to_recycle,
+            $client->body_status($s->{id})->{'waste_stored'}
+        );
+        verbose("recycling $recycle_capacity units of waste into new resources at center $center->{id}");
+
+        # pull our resource info out
+        my $resources;
+        for my $res ( @owe ) {
+            for my $stat ( qw( hour stored capacity ) ) {
+                $resources->{"${res}_${stat}"} = $s->{"${res}_${stat}"};
+            }
+        }
+
+        # determine what we want to make (hint: don't make it if it would excede capacity)
+        my %producing = map { $_ => ( $resources->{ "${_}_capacity" } > $resources->{ "${_}_stored" } + 1 ) } @owe;
+        my $production_count = sum( values %producing );
+        unless ( $production_count ) {
+            verbose("All storage is full. Falling back to balanced recycling.");
+            $production_count = scalar @owe;
+            @producing{ @owe } = (1) x $production_count;
+        }
+
+        #initialize our hash
+        my %recycle = map { $_ => 0 } @owe;
+        if ( $opts{'recycle-by-rate'} ) {
+            my ($focus) = sort { $resources->{ "${a}_hour" } <=> $resources->{ "${b}_hour" } } @owe;
+            $recycle{ $focus } = $recycle_capacity;
+        }
+        elsif ( $opts{'recycle-by-amount'} ) {
+            my ($focus) =
+                map  { $_->[0] }
+                sort { $a->[1] <=> $b->[1] }
+                map  { [ $_ => ($resources->{"${_}_stored"}/$resources->{"${_}_capacity"}) ] }
+                grep { $producing{ $_ } }
+                @owe;
+            $recycle{ $focus } = $recycle_capacity;
+        }
+        else { # default to balanced recycling
+            %recycle = map  { $_ => int( $recycle_capacity / $production_count ) * $producing{$_}||0 } @owe;
+        }
+
+        for my $res ( @owe ) {
+            verbose("we want to make $recycle{$res} units of $res");
+            $recycled{ $res } += $recycle{ $res };
+        }
+
+        $client->recycle_recycle($center->{id}, $recycle{water}, $recycle{ore}, $recycle{energy})
+            unless $opts{'dry-run'};
+        output("Recycled for $recycle{ore} ore, $recycle{water} water, and $recycle{energy} energy.");
+        $left_to_recycle -= $recycle_capacity;
+    }
+    # TODO $self->cache_invalidate( type => 'body_status', id => $s->{id} );
     return \%recycled;
 }
