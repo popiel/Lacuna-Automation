@@ -256,6 +256,12 @@ for my $j ($[..$#queue) {
     }
     else {
       my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+      if ($quiet && $sleepy) {
+        emit("Want to upgrade $type production");
+        for my $building (@buildings) {
+          printf("%s payoff ratio: %8.3f: delay %8.3f: %d %s\n", $type, $building->{payoff_ratio}, $building->{delay}, $building->{level}, $building->{name});
+        }
+      }
       emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
