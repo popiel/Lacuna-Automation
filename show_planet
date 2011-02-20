@@ -63,8 +63,8 @@ my %buildings;
 for my $id (keys %{$result->{buildings}}) {
   my $building = $result->{buildings}{$id};
   if (grep($_ eq $building->{name}, @foods)) {
-    warn "Viewing building $building->{name}\n";
-    $buildings{$building->{name}}{$building->{level}}{$id} = $client->building_view($building->{url}, $id);
+    # warn "Getting stats for building $building->{name}\n";
+    $buildings{$building->{name}}{$building->{level}}{$id} = $client->building_stats_for_level($building->{url}, $id, $building->{level});
   } else {
     $buildings{$building->{name}}{$building->{level}}{$id} = 1;
   }
