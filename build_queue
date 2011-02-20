@@ -238,6 +238,7 @@ for my $j ($[..$#queue) {
       $building->{cost_prod} = $prod_bias * List::Util::sum(
         map {
           my $diff = $building->{"${_}_hour"} - $building->{upgrade}{production}{"${_}_hour"};
+          $diff = -$diff if $_ eq "waste";
           $diff / ($status->{"${_}_hour"} - $diff);
         }
         grep { $_ ne $type } qw(food ore water energy waste)
