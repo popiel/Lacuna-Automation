@@ -231,13 +231,20 @@ for my $j ($[..$#queue) {
     }
     @buildings = @pruned;
     @buildings = grep { $_->{level} < $max_level } @buildings;
-    @buildings = grep { $_->{"${type}_hour"} > 0 } map { populate_building_with_production($_, @buildings) } @buildings;
+    @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
     for my $building (@buildings) {
       $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / ($status->{"${_}_hour"} || 0.001) } qw(food ore water energy));
       $building->{cost_time} = List::Util::max($building->{delay} + $building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / ($status->{"${_}_hour"} || 1) } qw(food ore water energy));
       $building->{payoff} = $building->{upgrade}{production}{"${type}_hour"} - $building->{"${type}_hour"};
+      if ($type eq "ore" && $building->{name} eq "Ore Refinery") {
+        my $current = List::Util::sum(map { $_->{ore_hour} }
+                                      grep { $_->{name} =~ /Volcano|Mine|Planetary Command Center/ } @buildings);
+        my $base = $current / (1 + $building->{level} * 0.05);
+        $building->{payoff} += $base * 0.05;
+      }
       $building->{payoff_ratio} = $building->{payoff} / $building->{cost_time};
     }
+    @buildings = grep { $_->{payoff_ratio} > 0 } @buildings;
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     if (!($quiet && $sleepy)) {
