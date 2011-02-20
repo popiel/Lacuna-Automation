@@ -158,8 +158,10 @@ for my $j ($[..$#queue) {
     grep(s/\s*$//, @args);
 
     my $max_level = 15;
+    my $prod_bias = 24;
     for my $arg (@args) {
       $max_level = $1 if $arg =~ /max level (\d+)/;
+      $prod_bias = $1 if $arg =~ /production bias (\d+)/;
     }
 
     my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
@@ -222,15 +224,6 @@ for my $j ($[..$#queue) {
     $type = (sort { $ratio{$a} <=> $ratio{$b} } keys %ratio)[0];
     emit("Want to upgrade $type production") unless $quiet && $sleepy;
 
-    @buildings = sort { $b->{level} <=> $a->{level} } @buildings;
-    my @pruned;
-    for my $building (@buildings) {
-      next if grep(/^0x ?$building->{name}/, @args);
-      grep(s/^(\d+)x ?$building->{name}/($1 - 1)."x $building->{name}"/e, @args);
-      push(@pruned, $building);
-    }
-    @buildings = @pruned;
-    @buildings = grep { $_->{level} < $max_level } @buildings;
     @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
     for my $building (@buildings) {
       $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / ($status->{"${_}_hour"} || 0.001) } qw(food ore water energy));
@@ -242,17 +235,38 @@ for my $j ($[..$#queue) {
         my $base = $current / (1 + $building->{level} * 0.05);
         $building->{payoff} += $base * 0.05;
       }
-      $building->{payoff_ratio} = $building->{payoff} / $building->{cost_time};
+      $building->{cost_prod} = $prod_bias * List::Util::sum(
+        map {
+          my $diff = $building->{"${_}_hour"} - $building->{upgrade}{production}{"${_}_hour"};
+          $diff / ($status->{"${_}_hour"} - $diff);
+        }
+        grep { $_ ne $type } qw(food ore water energy waste)
+      );
+      $building->{payoff_ratio} = $building->{payoff} / List::Util::max($building->{cost_time}, $building->{cost_prod});
     }
     @buildings = grep { $_->{payoff_ratio} > 0 } @buildings;
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     if (!($quiet && $sleepy)) {
       for my $building (@buildings) {
-        printf("%s payoff ratio: %8.3f: delay %8.3f: %d %s\n", $type, $building->{payoff_ratio}, $building->{delay}, $building->{level}, $building->{name});
+        printf("%s payoff ratio: %7.2f: c_t %5.2f, c_p %5.2f, wait %5.2f: %d %s\n",
+               $type, $building->{payoff_ratio},
+               $building->{cost_time}, $building->{cost_prod}, $building->{delay},
+               $building->{level}, $building->{name});
       }
     }
 
+    @buildings = sort { $b->{level} <=> $a->{level} } @buildings;
+    my @pruned;
+    for my $building (@buildings) {
+      next if grep(/^0x ?$building->{name}/, @args);
+      grep(s/^(\d+)x ?$building->{name}/($1 - 1)."x $building->{name}"/e, @args);
+      push(@pruned, $building);
+    }
+    @buildings = @pruned;
+    @buildings = grep { $_->{level} < $max_level } @buildings;
+
+    @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     my $building = $buildings[0];
     my $view = $client->building_view($building->{url}, $building->{id})->{building};
     unless ($view->{upgrade}{can}) {
@@ -268,7 +282,10 @@ for my $j ($[..$#queue) {
       if ($quiet && $sleepy) {
         emit("Want to upgrade $type production");
         for my $building (@buildings) {
-          printf("%s payoff ratio: %8.3f: delay %8.3f: %d %s\n", $type, $building->{payoff_ratio}, $building->{delay}, $building->{level}, $building->{name});
+          printf("%s payoff ratio: %7.2f: c_t %5.2f, c_p %5.2f, wait %5.2f: %d %s\n",
+                 $type, $building->{payoff_ratio},
+                 $building->{cost_time}, $building->{cost_prod}, $building->{delay},
+                 $building->{level}, $building->{name});
         }
       }
       emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
