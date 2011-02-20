@@ -217,6 +217,8 @@ for my $j ($[..$#queue) {
       }
     }
 
+    next if grep { $_ eq 'storage only' } @args;
+
     $type = (sort { $ratio{$a} <=> $ratio{$b} } keys %ratio)[0];
     emit("Want to upgrade $type production") unless $quiet && $sleepy;
 
