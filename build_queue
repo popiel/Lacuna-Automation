@@ -8,6 +8,7 @@ use Date::Manip;
 use Getopt::Long;
 use IO::Handle;
 use JSON::XS;
+use List::Util qw(max);
 
 autoflush STDOUT 1;
 autoflush STDERR 1;
@@ -40,7 +41,14 @@ if ($body_name) {
 }
 
 my $buildings = $client->body_buildings($body_id);
-exit(0) if grep($_->{pending_build}, values(%{$buildings->{buildings}}));
+my $ready_in;
+my @builds = grep($_->{pending_build}, values(%{$buildings->{buildings}}));
+if (scalar @builds) {
+    $ready_in = max(map { $_->{pending_build}{seconds_remaining} } @builds);
+    # the build-in cache makes this like ~30 minutes off sometimes
+    print "builds complete in $ready_in seconds.\n";
+    exit(0);
+}
 
 $body_name = $client->body_status($body_id)->{name};
 
@@ -61,6 +69,8 @@ for my $j ($[..$#queue) {
   chomp $command;
   $command =~ s/wait quietly/-wait/;
   my $quiet;
+  my $rebuild;
+  my $requeue;
   $quiet = 1 if $command =~ s/^\-//;
   $abort = 1 if $command =~ s/^\!//;
   my $priority = ($abort) ? '!' : '';
@@ -110,7 +120,7 @@ for my $j ($[..$#queue) {
       }
       elsif ($requeue) {
         emit("Requeueing $name at the back of the queue\n");
-        push(@queue, "+upgrade 1 $name");
+        push(@queue, "+upgrade 1 $name\n");
       }
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
