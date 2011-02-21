@@ -40,17 +40,16 @@ if ($body_name) {
   $body_id = $client->empire_status->{home_planet_id};
 }
 
+$body_name = $client->body_status($body_id)->{name};
+
 my $buildings = $client->body_buildings($body_id);
 my $ready_in;
 my @builds = grep($_->{pending_build}, values(%{$buildings->{buildings}}));
 if (scalar @builds) {
-    $ready_in = max(map { $_->{pending_build}{seconds_remaining} } @builds);
-    # the build-in cache makes this like ~30 minutes off sometimes
-    print "builds complete in $ready_in seconds.\n";
+    $ready_in = max(map { Client::parse_time($_->{pending_build}{end}) } @builds) - time();
+    emit("builds complete in $ready_in seconds.") unless $quiet_no_body;
     exit(0);
 }
-
-$body_name = $client->body_status($body_id)->{name};
 
 $queue_name ||= "$body_name.queue";
 $queue_name =~ s/\s+/_/g;
@@ -74,8 +73,6 @@ for my $j ($[..$#queue) {
   $quiet = 1 if $command =~ s/^\-//;
   $abort = 1 if $command =~ s/^\!//;
   my $priority = ($abort) ? '!' : '';
-  my $rebuild;
-  my $requeue;
   $rebuild = 1 if $command =~ s/^\+\+//;
   $requeue = 1 if $command =~ s/^\+//;
   my $sleepy = (localtime())[1] % 30;
