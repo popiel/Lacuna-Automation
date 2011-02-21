@@ -125,9 +125,10 @@ for my $j ($[..$#queue) {
       my $building = $buildings->{buildings}{$id};
       print "Matching against $building->{level} $building->{name}\n" if $debug;
       if ($building->{name} eq $name && (!$level || $building->{level} == $level)) {
-        my $view = $client->building_view($building->{url}, $id);
-        unless ($view && $view->{building}{upgrade}{can}) {
-          emit("Cannot upgrade $level $name: $view->{building}{upgrade}{reason}[1]") unless $quiet && $sleepy;
+        $building->{id} = $id;
+        my $message = upgrade_check($building);
+        if ($message) {
+          emit("Cannot upgrade $level $name: $message") unless $quiet && $sleepy;
           if ($queue[$j] !~ /^\-/) {
             splice(@queue, $j, 1, "-$queue[$j]");
             write_queue();
@@ -171,9 +172,9 @@ for my $j ($[..$#queue) {
     if ($storage[0]{level} < $storage[$#storage]{level}) {
       emit("Equalizing storage levels") unless $quiet && $sleepy;
       my $building = $storage[0];
-      my $view = $client->building_view($building->{url}, $building->{id})->{building};
-      unless ($view->{upgrade}{can}) {
-        emit("Cannot upgrade $building->{level} $building->{name}: $view->{upgrade}{reason}[1]") unless $quiet && $sleepy;
+      my $message = upgrade_check($building);
+      if ($message) {
+        emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
         if ($queue[$j] !~ /^\-/) {
           splice(@queue, $j, 1, "-$queue[$j]");
           write_queue();
@@ -201,9 +202,9 @@ for my $j ($[..$#queue) {
                     grep { $_->{name} =~ /^$type (Storage|Reserve)/i }
                     @buildings;
       my $building = $storage[0];
-      my $view = $client->building_view($building->{url}, $building->{id})->{building};
-      unless ($view->{upgrade}{can}) {
-        emit("Cannot upgrade $building->{level} $building->{name}: $view->{upgrade}{reason}[1]") unless $quiet && $sleepy;
+      my $message = upgrade_check($building);
+      if ($message) {
+        emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
         if ($queue[$j] !~ /^\-/) {
           splice(@queue, $j, 1, "-$queue[$j]");
           write_queue();
@@ -269,9 +270,9 @@ for my $j ($[..$#queue) {
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     my $building = $buildings[0];
-    my $view = $client->building_view($building->{url}, $building->{id})->{building};
-    unless ($view->{upgrade}{can}) {
-      emit("Cannot upgrade $building->{level} $building->{name}: $view->{upgrade}{reason}[1]") unless $quiet && $sleepy;
+    my $message = upgrade_check($building);
+    if ($message) {
+      emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
       if ($queue[$j] !~ /^\-/) {
         splice(@queue, $j, 1, "-$queue[$j]");
         write_queue();
@@ -295,6 +296,21 @@ for my $j ($[..$#queue) {
       exit(0);
     }
   }
+}
+
+sub upgrade_check {
+  my $building = shift;
+  $building = populate_building_with_production($building);
+  my $status = $client->body_status($body_id);
+  my @message;
+  for (qw(food ore water energy)) {
+    push(@message, "$_ (".$status->{"${_}_stored"}."/".$building->{upgrade}{cost}{$_}.")")
+      if $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_};
+  }
+  return "Not enough ".join(", ", @message)." in storage to build this." if @message;
+  my $view = $client->building_view($building->{url}, $building->{id})->{building};
+  return $view->{upgrade}{reason}[1] unless $view->{upgrade}{can};
+  return;
 }
 
 sub populate_building_with_production {
