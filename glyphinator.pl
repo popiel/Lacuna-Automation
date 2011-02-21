@@ -798,7 +798,7 @@ sub send_excavators {
                             output("Would have sent excavator from $planet to $dest_name (" . pluralize($distance, "unit") . ", zone $zone).\n");
                         } else {
                             output("Sending excavator from $planet to $dest_name (" . pluralize($distance, "unit") . ", zone $zone)...\n");
-                            my $launch_status = $port->send_ship($ex->{id}, {x => $x, y => $y});
+                            my $launch_status = $client->send_ship($ex->{id}, {x => $x, y => $y});
 
                             if ($launch_status->{ship}->{date_arrives}) {
                                 $launch_count++;

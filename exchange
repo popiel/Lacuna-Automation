@@ -15,6 +15,7 @@ autoflush STDERR 1;
 my $config_name = "config.json";
 my @body_name;
 my $ship_name;
+my $equalize = 0;
 my $debug = 0;
 my $quiet = 0;
 
@@ -22,6 +23,7 @@ GetOptions(
   "config=s"    => \$config_name,
   "body=s"      => \@body_name,
   "ship|name=s" => \$ship_name,
+  "equalize"    => \$equalize,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
@@ -105,26 +107,38 @@ distribute($client->body_status($body_id[0])->{ore_capacity},
            @ores);
 distribute($client->body_status($body_id[0])->{water_capacity }, 0, "water");
 distribute($client->body_status($body_id[0])->{energy_capacity}, 0, "energy");
-$desire{waste} = List::Util::min($client->body_status($body_id[0])->{waste_stored},
-                                 $client->body_status($body_id[0])->{waste_capacity} * 3 / 4);
+if ($equalize) {
+  distribute($client->body_status($body_id[0])->{waste_capacity}, 0, "waste");
+}
+else {
+  $desire{waste} = List::Util::min($client->body_status($body_id[0])->{waste_stored},
+                                   $client->body_status($body_id[0])->{waste_capacity} * 3 / 4);
+}
 
 sub distribute {
   my $capacity = shift;
   my $rate     = shift;
   my @types    = @_;
 
-  $rate = 0 if $rate < 0;
+  if ($equalize) {
+    for my $type (@types) {
+      $desire{$type} = int($total{$type} / 2);
+    }
+  }
+  else {
+    $rate = 0 if $rate < 0;
 
-  my $buffer         = int($rate / 3600 * $duration * 2);
-  my $fill_remaining = $capacity - $buffer;
+    my $buffer         = int($rate / 3600 * $duration * 2);
+    my $fill_remaining = $capacity - $buffer;
 
-  # Distribute capacity as evenly as possible across types
-  @types = sort { $total{$a} <=> $total{$b} } grep($total{$_}, @types);
-  while (@types && $fill_remaining) {
-    my $per = int($fill_remaining / @types);
-    my $type = shift @types;
-    $desire{$type} = List::Util::min($total{$type}, $per);
-    $fill_remaining -= $desire{$type};
+    # Distribute capacity as evenly as possible across types
+    @types = sort { $total{$a} <=> $total{$b} } grep($total{$_}, @types);
+    while (@types && $fill_remaining) {
+      my $per = int($fill_remaining / @types);
+      my $type = shift @types;
+      $desire{$type} = List::Util::min($total{$type}, $per);
+      $fill_remaining -= $desire{$type};
+    }
   }
 }
 

@@ -55,8 +55,6 @@ close $file;
 
 my $buildable;
 my $abort;
-my $rebuild;
-my $requeue;
 for my $j ($[..$#queue) {
   exit(0) if $abort;
   my $command = $queue[$j];
@@ -66,6 +64,8 @@ for my $j ($[..$#queue) {
   $quiet = 1 if $command =~ s/^\-//;
   $abort = 1 if $command =~ s/^\!//;
   my $priority = ($abort) ? '!' : '';
+  my $rebuild;
+  my $requeue;
   $rebuild = 1 if $command =~ s/^\+\+//;
   $requeue = 1 if $command =~ s/^\+//;
   my $sleepy = (localtime())[1] % 30;
@@ -105,11 +105,11 @@ for my $j ($[..$#queue) {
       emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
       splice(@queue, $j, 1);
       if ($rebuild) {
-        emit("Upgrading $name at the front of the queue");
+        emit("Requeueing $name at the front of the queue");
         unshift(@queue, "$priority++upgrade 1 $name\n");
       }
       elsif ($requeue) {
-        emit("Upgrading $name at the back of the queue\n");
+        emit("Requeueing $name at the back of the queue\n");
         push(@queue, "+upgrade 1 $name");
       }
       @queue = map { s/^\-//; $_; } @queue;
@@ -125,9 +125,10 @@ for my $j ($[..$#queue) {
       my $building = $buildings->{buildings}{$id};
       print "Matching against $building->{level} $building->{name}\n" if $debug;
       if ($building->{name} eq $name && (!$level || $building->{level} == $level)) {
-        my $view = $client->building_view($building->{url}, $id);
-        unless ($view && $view->{building}{upgrade}{can}) {
-          emit("Cannot upgrade $level $name: $view->{building}{upgrade}{reason}[1]") unless $quiet && $sleepy;
+        $building->{id} = $id;
+        my $message = upgrade_check($building);
+        if ($message) {
+          emit("Cannot upgrade $level $name: $message") unless $quiet && $sleepy;
           if ($queue[$j] !~ /^\-/) {
             splice(@queue, $j, 1, "-$queue[$j]");
             write_queue();
@@ -138,11 +139,11 @@ for my $j ($[..$#queue) {
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
         splice(@queue, $j, 1);
         if ($rebuild) {
-          emit("Upgrading $name at the front of the queue");
+          emit("Requeueing $name at the front of the queue");
           unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, $level + 1, $name));
         }
         elsif ($requeue) {
-          emit("Upgrading $name at the back of the queue");
+          emit("Requeueing $name at the back of the queue");
           push(@queue, sprintf("+upgrade %s %s\n", $level + 1, $name));
         }
         @queue = map { s/^\-//; $_; } @queue;
@@ -158,8 +159,35 @@ for my $j ($[..$#queue) {
     grep(s/\s*$//, @args);
 
     my $max_level = 15;
+    my $prod_bias = 24;
     for my $arg (@args) {
       $max_level = $1 if $arg =~ /max level (\d+)/;
+      $prod_bias = $1 if $arg =~ /production bias (\d+)/;
+    }
+
+    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @storage = sort { $a->{level} <=> $b->{level} || $b->{name} cmp $a->{name} }
+                  grep { $_->{name} =~ /^(Ore|Water|Food|Energy) (Storage|Reserve)/ }
+                  @buildings;
+    if ($storage[0]{level} < $storage[$#storage]{level}) {
+      emit("Equalizing storage levels") unless $quiet && $sleepy;
+      my $building = $storage[0];
+      my $message = upgrade_check($building);
+      if ($message) {
+        emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
+        if ($queue[$j] !~ /^\-/) {
+          splice(@queue, $j, 1, "-$queue[$j]");
+          write_queue();
+        }
+        next;
+      }
+      else {
+        my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+        emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+        @queue = map { s/^\-//; $_; } @queue;
+        write_queue();
+        exit(0);
+      }
     }
 
     my $status = $client->body_status($body_id);
@@ -167,10 +195,69 @@ for my $j ($[..$#queue) {
     for my $type (qw(food ore water energy)) {
       $ratio{$type} = $status->{"${type}_stored"} / $status->{"${type}_capacity"};
     }
-    my $type = (sort { $ratio{$a} <=> $ratio{$b} } keys %ratio)[0];
+    my $type = (sort { $ratio{$b} <=> $ratio{$a} } keys %ratio)[0];
+    if ($ratio{$type} > 0.95) {
+      emit("Near storage limit for $type") unless $quiet && $sleepy;
+      my @storage = sort { $a->{level} <=> $b->{level} }
+                    grep { $_->{name} =~ /^$type (Storage|Reserve)/i }
+                    @buildings;
+      my $building = $storage[0];
+      my $message = upgrade_check($building);
+      if ($message) {
+        emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
+        if ($queue[$j] !~ /^\-/) {
+          splice(@queue, $j, 1, "-$queue[$j]");
+          write_queue();
+        }
+        next;
+      }
+      else {
+        my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+        emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+        @queue = map { s/^\-//; $_; } @queue;
+        write_queue();
+        exit(0);
+      }
+    }
+
+    next if grep { $_ eq 'storage only' } @args;
+
+    $type = (sort { $ratio{$a} <=> $ratio{$b} } keys %ratio)[0];
     emit("Want to upgrade $type production") unless $quiet && $sleepy;
 
-    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
+    for my $building (@buildings) {
+      $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / ($status->{"${_}_hour"} || 0.001) } qw(food ore water energy));
+      $building->{cost_time} = List::Util::max($building->{delay} + $building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / ($status->{"${_}_hour"} || 1) } qw(food ore water energy));
+      $building->{payoff} = $building->{upgrade}{production}{"${type}_hour"} - $building->{"${type}_hour"};
+      if ($type eq "ore" && $building->{name} eq "Ore Refinery") {
+        my $current = List::Util::sum(map { $_->{ore_hour} }
+                                      grep { $_->{name} =~ /Volcano|Mine|Planetary Command Center/ } @buildings);
+        my $base = $current / (1 + $building->{level} * 0.05);
+        $building->{payoff} += $base * 0.05;
+      }
+      $building->{cost_prod} = $prod_bias * List::Util::sum(
+        map {
+          my $diff = $building->{"${_}_hour"} - $building->{upgrade}{production}{"${_}_hour"};
+          $diff = -$diff if $_ eq "waste";
+          $diff / ($status->{"${_}_hour"} - $diff);
+        }
+        grep { $_ ne $type } qw(food ore water energy waste)
+      );
+      $building->{payoff_ratio} = $building->{payoff} / List::Util::max($building->{cost_time}, $building->{cost_prod});
+    }
+    @buildings = grep { $_->{payoff_ratio} > 0 } @buildings;
+
+    @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
+    if (!($quiet && $sleepy)) {
+      for my $building (@buildings) {
+        printf("%s payoff ratio: %7.2f: c_t %5.2f, c_p %5.2f, wait %5.2f: %d %s\n",
+               $type, $building->{payoff_ratio},
+               $building->{cost_time}, $building->{cost_prod}, $building->{delay},
+               $building->{level}, $building->{name});
+      }
+    }
+
     @buildings = sort { $b->{level} <=> $a->{level} } @buildings;
     my @pruned;
     for my $building (@buildings) {
@@ -180,25 +267,12 @@ for my $j ($[..$#queue) {
     }
     @buildings = @pruned;
     @buildings = grep { $_->{level} < $max_level } @buildings;
-    @buildings = grep { $_->{"${type}_hour"} > 0 } map { populate_building_with_production($_, @buildings) } @buildings;
-    for my $building (@buildings) {
-      $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / ($status->{"${_}_hour"} || 0.001) } qw(food ore water energy));
-      $building->{cost_time} = List::Util::max($building->{delay} + $building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / ($status->{"${_}_hour"} || 1) } qw(food ore water energy));
-      $building->{payoff} = $building->{upgrade}{production}{"${type}_hour"} - $building->{"${type}_hour"};
-      $building->{payoff_ratio} = $building->{payoff} / $building->{cost_time};
-    }
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
-    if (!($quiet && $sleepy)) {
-      for my $building (@buildings) {
-        printf("%s payoff ratio: %8.3f: delay %8.3f: %d %s\n", $type, $building->{payoff_ratio}, $building->{delay}, $building->{level}, $building->{name});
-      }
-    }
-
     my $building = $buildings[0];
-    my $view = $client->building_view($building->{url}, $building->{id})->{building};
-    unless ($view->{upgrade}{can}) {
-      emit("Cannot upgrade $building->{level} $building->{name}: $view->{upgrade}{reason}[1]") unless $quiet && $sleepy;
+    my $message = upgrade_check($building);
+    if ($message) {
+      emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
       if ($queue[$j] !~ /^\-/) {
         splice(@queue, $j, 1, "-$queue[$j]");
         write_queue();
@@ -207,6 +281,15 @@ for my $j ($[..$#queue) {
     }
     else {
       my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+      if ($quiet && $sleepy) {
+        emit("Want to upgrade $type production");
+        for my $building (@buildings) {
+          printf("%s payoff ratio: %7.2f: c_t %5.2f, c_p %5.2f, wait %5.2f: %d %s\n",
+                 $type, $building->{payoff_ratio},
+                 $building->{cost_time}, $building->{cost_prod}, $building->{delay},
+                 $building->{level}, $building->{name});
+        }
+      }
       emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
@@ -215,63 +298,28 @@ for my $j ($[..$#queue) {
   }
 }
 
+sub upgrade_check {
+  my $building = shift;
+  $building = populate_building_with_production($building);
+  my $status = $client->body_status($body_id);
+  my @message;
+  for (qw(food ore water energy)) {
+    push(@message, "$_ (".$status->{"${_}_stored"}."/".$building->{upgrade}{cost}{$_}.")")
+      if $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_};
+  }
+  return "Not enough ".join(", ", @message)." in storage to build this." if @message;
+  my $view = $client->building_view($building->{url}, $building->{id})->{building};
+  return $view->{upgrade}{reason}[1] unless $view->{upgrade}{can};
+  return;
+}
+
 sub populate_building_with_production {
   my $building = shift;
   my @buildings = @_;
   my ($name,$level) = ($building->{name}, $building->{level});
   # print "Viewing data for $level $name\n";
-  my $base = $client->read_json("model/buildings/$name");
-  unless ($base) {
-    $base = $client->building_stats_for_level($building->{url}, $building->{id}, 15)->{building};
-    if ($name eq 'Mine' || $name eq 'Volcano') {
-      my $refinery = (grep { $_->{name} eq "Ore Refinery" } @buildings)[0];
-      $base->{ore_hour} /= 1 + $refinery->{level} * 0.05;
-    }
-    $client->write_json("model/buildings/$name", building_production => $base);
-  }
-  if ($name eq 'Mine' || $name eq 'Volcano') {
-    my $refinery = (grep { $_->{name} eq "Ore Refinery" } @buildings)[0];
-    $base->{ore_hour} *= 1 + $refinery->{level} * 0.05;
-  }
-
-  if ($level < $base->{level}) {
-    for ($level..($base->{level} - 1)) {
-      for my $key (keys(%{$base->{upgrade}{production}})) {
-        $base->{$key} /= 1.55;
-        $base->{upgrade}{production}{$key} /= 1.55;
-      }
-      for my $key (qw(food ore water energy waste)) {
-        $base->{upgrade}{cost}{$key} /= 1.75;
-      }
-    }
-  }
-  elsif ($level > $base->{level}) {
-    for (($base->{level} + 1)..$level) {
-      for my $key (keys(%{$base->{upgrade}{production}})) {
-        $base->{$key} *= 1.55;
-        $base->{upgrade}{production}{$key} *= 1.55;
-      }
-      for my $key (qw(food ore water energy waste)) {
-        $base->{upgrade}{cost}{$key} *= 1.75;
-      }
-    }
-  }
-
-  if ($debug) {
-    my $check = $client->building_view($building->{url}, $building->{id})->{building};
-    for my $key (keys(%{$base->{upgrade}{production}})) {
-      warn "Disagreement: $key expected $base->{$key}, actual $check->{$key}\n" if abs($base->{$key} - $check->{$key}) > 2;
-      warn "Disagreement: upgrade $key expected $base->{upgrade}{production}{$key}, actual $check->{upgrade}{production}{$key}\n" if abs($base->{upgrade}{production}{$key} - $check->{upgrade}{production}{$key}) > 2;
-    }
-    for my $key (qw(food ore water energy waste)) {
-      warn "Disagreement: cost $key expected $base->{upgrade}{cost}{$key}, actual $check->{upgrade}{cost}{$key}\n" if abs($base->{upgrade}{cost}{$key} - $check->{upgrade}{cost}{$key}) > 2;
-    }
-  }
-  
-  delete($base->{level});
-  delete($base->{id});
-
-  return { %$building, %$base };
+  my $stats = $client->building_stats_for_level($building->{url}, $building->{id}, $building->{level})->{building};
+  return { %$building, %$stats };
 }
 
 sub emit {
