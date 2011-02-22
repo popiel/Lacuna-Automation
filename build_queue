@@ -251,7 +251,7 @@ for my $j ($[..$#queue) {
         }
         grep { $_ ne $type } qw(food ore water energy waste)
       );
-      $building->{payoff_ratio} = $building->{payoff} / List::Util::sum($building->{cost_time}, $building->{cost_prod});
+      $building->{payoff_ratio} = $building->{payoff} / List::Util::max(0.1, List::Util::sum($building->{cost_time}, $building->{cost_prod}));
     }
     @buildings = grep { $_->{payoff_ratio} > 0 } @buildings;
 
