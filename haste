@@ -333,7 +333,7 @@ sub proportionalize {
         }
     }
 
-    if ( 0 == sum( values %dump_amount ) ) {
+    if ( keys %dump_amount &&  0 == sum( values %dump_amount ) ) {
         verbose( "Looks like you have equal amounts of all resources; evenly splitting total dump amount" );
         my $amount = int( ( $limit ) / scalar keys %dump_amount )||1;
         $dump_amount{ $_ } += $amount for keys %dump_amount;
