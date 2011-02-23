@@ -215,6 +215,11 @@ sub make_waste {
         }
         keys %{$body_buildings};
 
+    unless ( keys %storage_facilities ) {
+        output( 'No storage facilities found; cannot produce waste!' );
+        return;
+    }
+
     output("Gathering resource information");
     # only consider resources that we can dump
     my %resources = map { $_ => $s->{"${_}_stored"} } keys %seen;
@@ -227,6 +232,8 @@ sub make_waste {
     debug('storage facilities: ',Dumper(\%storage_facilities));
     dump_resource( $storage_facilities{$_}, $_, $resource_dump{ $_ } ) for ( keys %resource_dump );
     $client->cache_invalidate( type => 'body_status', id => $s->{id} );
+
+    return;
 }
 
 sub dump_resource {
@@ -328,7 +335,7 @@ sub proportionalize {
         }
     }
 
-    if ( 0 == sum( values %dump_amount ) ) {
+    if ( keys %dump_amount &&  0 == sum( values %dump_amount ) ) {
         verbose( "Looks like you have equal amounts of all resources; evenly splitting total dump amount" );
         my $amount = int( ( $limit ) / scalar keys %dump_amount )||1;
         $dump_amount{ $_ } += $amount for keys %dump_amount;
