@@ -247,11 +247,11 @@ for my $j ($[..$#queue) {
         map {
           my $diff = $building->{"${_}_hour"} - $building->{upgrade}{production}{"${_}_hour"};
           $diff = -$diff if $_ eq "waste";
-          $diff / ($status->{"${_}_hour"} - $diff);
+          $status->{"${_}_hour"} <= $diff ? 10000 : $diff / ($status->{"${_}_hour"} - $diff);
         }
         grep { $_ ne $type } qw(food ore water energy waste)
       );
-      $building->{payoff_ratio} = $building->{payoff} / List::Util::max(0.1, List::Util::sum($building->{cost_time}, $building->{cost_prod}));
+      $building->{payoff_ratio} = $building->{payoff} / List::Util::max(0.1, List::Util::max($building->{cost_time}, $building->{cost_prod}));
     }
     @buildings = grep { $_->{payoff_ratio} > 0 } @buildings;
 
