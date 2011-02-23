@@ -112,3 +112,12 @@ get_json [element/path [file ...]]
   This pretty-prints json, optionally selecting just a portion of the input
   (picking hash elements per the supplied path).
   Input is from stdin, or files named after the element path.
+
+haste [options]
+  This script attempts to maintain waste levels within your specified parameters,
+  sustaining a minimum amount of waste for your waste consuming planets and
+  keeping waste below a maximum percentage of your storage. It adapts to the
+  capacity and production levels for each planet.
+
+  For more information, try running:
+  > haste --help
