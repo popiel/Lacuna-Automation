@@ -47,6 +47,7 @@ build_queue [--body Name] [--queue Name]
       <count>x<building name> : maximum number of building type that should be maintained
       storage only            : only upgrade storage buildings
       production bias <hours> : amount of time to consider for secondary production impacts
+      ignore <types>          : don't upgrade storage or production for some resource types
 
     Building priority is actually equalizing storage building levels, then
     upgrading storage if within 95% of capacity, then upgrading resource

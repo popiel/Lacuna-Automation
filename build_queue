@@ -167,9 +167,14 @@ for my $j ($[..$#queue) {
 
     my $max_level = 15;
     my $prod_bias = 24;
+    my %ignore;
     for my $arg (@args) {
       $max_level = $1 if $arg =~ /max level (\d+)/;
       $prod_bias = $1 if $arg =~ /production bias (\d+)/;
+      if ($arg =~ /ignore (.+)/) {
+        my $stuff = $1;
+        $ignore{$_} = 1 for split(/\s+/, $stuff);
+      }
     }
 
     my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
@@ -205,7 +210,7 @@ for my $j ($[..$#queue) {
         }
       }
 
-      $type = (sort { $ratio{$b} <=> $ratio{$a} } keys %ratio)[0];
+      $type = (sort { $ratio{$b} <=> $ratio{$a} } grep { !$ignore{$_} } keys %ratio)[0];
       if ($ratio{$type} > 0.95) {
         emit("Near storage limit for $type") unless $quiet && $sleepy;
         my @storage = sort { $a->{level} <=> $b->{level} }
@@ -233,7 +238,7 @@ for my $j ($[..$#queue) {
 
     next if grep { $_ eq 'storage only' } @args;
 
-    $type = (sort { $ratio{$a} <=> $ratio{$b} } keys %ratio)[0];
+    $type = (sort { $ratio{$a} <=> $ratio{$b} } grep { !$ignore{$_} } keys %ratio)[0];
     emit("Want to upgrade $type production") unless $quiet && $sleepy;
 
     @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
