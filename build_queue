@@ -165,10 +165,12 @@ for my $j ($[..$#queue) {
     grep(s/^\s*//, @args);
     grep(s/\s*$//, @args);
 
+    my $focus = "stored";
     my $max_level = 15;
     my $prod_bias = 24;
     my %ignore;
     for my $arg (@args) {
+      $focus     = $1 if $arg =~ /focus (store|hour|prod)/;
       $max_level = $1 if $arg =~ /max level (\d+)/;
       $prod_bias = $1 if $arg =~ /production bias (\d+)/;
       if ($arg =~ /ignore (.+)/) {
@@ -176,6 +178,7 @@ for my $j ($[..$#queue) {
         $ignore{$_} = 1 for split(/\s+/, $stuff);
       }
     }
+    $focus = ($focus =~ /store/) ? "stored" : "hour";
 
     my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
     my $status = $client->body_status($body_id);
@@ -203,6 +206,7 @@ for my $j ($[..$#queue) {
         }
         else {
           my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+          emit("Equalizing storage levels") if $quiet && $sleepy;
           emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
           @queue = map { s/^\-//; $_; } @queue;
           write_queue();
@@ -228,6 +232,7 @@ for my $j ($[..$#queue) {
         }
         else {
           my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+          emit("Near storage limit for $type") if $quiet && $sleepy;
           emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
           @queue = map { s/^\-//; $_; } @queue;
           write_queue();
@@ -238,7 +243,11 @@ for my $j ($[..$#queue) {
 
     next if grep { $_ eq 'storage only' } @args;
 
-    $type = (sort { $ratio{$a} <=> $ratio{$b} } grep { !$ignore{$_} } keys %ratio)[0];
+    if ($focus eq "stored") {
+      $type = (sort { $ratio{$a} <=> $ratio{$b} } grep { !$ignore{$_} } keys %ratio)[0];
+    } else {
+      $type = (sort { $status->{"${a}_hour"} <=> $status->{"${b}_hour"} } grep { !$ignore{$_} } keys %ratio)[0];
+    }
     emit("Want to upgrade $type production") unless $quiet && $sleepy;
 
     @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
