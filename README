@@ -84,9 +84,10 @@ archaeologist [--body Name] --ore type
 
 trade_push --body Name --target Name --ship Name --cargo 'stuff' [--stay]
   Push some resources between two planets.
-  The cargo is specified either as a single resource name
-  (in which case the ship will be fully filled),
-  or as a json hash of resource : quantity mappings.
+  The cargo may be specified as:
+    "all" => all available resources are shipped (leaving 100 of each type)
+    a single resource name => max amount of that resource is shipped
+    a json hash of resource : quantity mappings => exact cargo shipped
 
 exchange --body Colony --body Supplier [--ship NamePattern] [--equalize]
   Supply the Colony with as close to equal amounts of each food and ore

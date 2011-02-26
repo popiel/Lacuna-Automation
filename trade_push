@@ -66,8 +66,28 @@ my $items;
 if ($cargo =~ /^\{/) {
   $cargo = decode_json($cargo);
   $items = [ map { { type => $_, quantity => $cargo->{$_} } } keys %$cargo ];
-} else {
-  $items = [ { type => $cargo, quantity => $ship->{hold_size} } ],
+}
+elsif ($cargo eq "all") {
+  my %avail;
+  my $resources = $client->call(trade => get_stored_resources => $trade->{id});
+  for my $res (keys %{$resources->{resources}}) {
+    $avail{$res} = List::Util::max(0, $resources->{resources}{$res} - 100);
+  }
+  my $remain = $ship->{hold_size};
+  my %sending;
+  my @res = sort { $avail{$a} <=> $avail{$b} } grep { $avail{$_} } keys %avail;
+  while (@res) {
+    my $max = int($remain / @res);
+    my $res = shift @res;
+    $sending{$res} = List::Util::min($max, $avail{$res});
+    $remain -= $sending{$res};
+  }
+  $items = [ map { { type => $_, quantity => $sending{$_} } } keys %sending ];
+}
+else {
+  my $resources = $client->call(trade => get_stored_resources => $trade->{id});
+  my $amount = List::Util::min($ship->{hold_size}, $resources->{resources}{$cargo});
+  $items = [ { type => $cargo, quantity => $amount } ],
 }
 
 my $result = $client->trade_push(
