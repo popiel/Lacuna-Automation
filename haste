@@ -252,16 +252,20 @@ sub dump_resource {
             my $food_stored = $client->call('foodreserve','view',$building->{id})->{'food_stored'};
             my %food_types = proportionalize($amount, $food_stored);
             while ( my ($specifically, $amount) = each %food_types ) {
+                next unless $amount;
                 output("Dumping $amount units of $specifically");
-                $client->call('foodreserve','dump',$building->{id}, $specifically, $amount) unless $opts{'dry-run'};
+                $client->call('foodreserve','dump',$building->{id}, $specifically, $amount)
+                        unless $opts{'dry-run'};
             }
         }
         when ('ore') {
             my $ore_stored = $client->call('orestorage','view',$building->{id})->{'ore_stored'};
             my %ore_types = proportionalize($amount, $ore_stored);
             while ( my ($specifically, $amount) = each %ore_types ) {
+                next unless $amount;
                 output("Dumping $amount units of $specifically");
-                $client->call('orestorage','dump',$building->{id}, $specifically, $amount) unless $opts{'dry-run'};
+                $client->call('orestorage','dump',$building->{id}, $specifically, $amount)
+                        unless $opts{'dry-run'};
             }
         }
         default {
