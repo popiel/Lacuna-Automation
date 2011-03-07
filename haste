@@ -277,16 +277,14 @@ sub dump_resource {
 sub waste_disposal {
     my ($s, $amount) = @_;
 
-    my $dumped   = scow_dump( $s, $amount );
-    output("Shipped off $dumped units of waste via scow");
-
-    return if ($dumped >= $amount);
-    my $recycled = recycle( $s, ($amount - $dumped) );
+    my $recycled_amount = 0;
+    my $recycled = recycle( $s, $amount );
     if (keys %$recycled) {
+        $recycled_amount = sum( values %$recycled );
         output(
             sprintf(
                 "Recycled %d units of waste into %s",
-                sum( values %$recycled ),
+                $recycled_amount,
                 join('; ', map { "$_: $recycled->{$_}" } keys %$recycled ),
             )
         );
@@ -294,6 +292,10 @@ sub waste_disposal {
     else {
         output("Could not recycle waste into resources");
     }
+
+    return if ($recycled_amount >= $amount);
+    my $dumped   = scow_dump( $s, ($amount - $recycled_amount) );
+    output("Shipped off $dumped units of waste via scow");
 
     $client->cache_invalidate( type => 'body_status', id => $s->{id} );
 }
