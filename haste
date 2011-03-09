@@ -241,6 +241,7 @@ sub dump_resource {
 
     debug( 'building: ',Dumper( $building ) );
     output("Dump $amount units of $type");
+    return unless $amount;
     given ($type) {
         when ('energy') {
             $client->call('energyreserve','dump',$building->{id}, $amount) unless $opts{'dry-run'};
