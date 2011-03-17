@@ -479,14 +479,9 @@ sub port_all_ships {
   my $result = $self->cache_read( type => 'spaceport_view_all_ships', id => $building_id, stale => 3600 );
   return $result if $result;
 
-  my $page = 1;
   my @ships;
-  for (;;) {
-    $result = $self->call(spaceport => view_all_ships => $building_id, $page);
-    push(@ships, @{$result->{ships}});
-    last if @{$result->{ships}} < 25;
-    $page++;
-  }
+  $result = $self->call(spaceport => view_all_ships => $building_id, { no_paging => 1 });
+  push(@ships, @{$result->{ships}});
   $result->{ships} = [ @ships ];
   my @completions;
   for my $ship (@{$result->{ships}}) {

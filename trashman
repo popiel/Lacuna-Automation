@@ -54,7 +54,7 @@ my @centers = sort { $b->{level} <=> $a->{level} } grep($_->{name} eq "Waste Rec
 for my $center (@centers) {
   next if $center->{work};
   my $view = $client->building_view($center->{url}, $center->{id});
-  my $waste = List::Util::min(595 / $view->{recycle}{seconds_per_resource},
+  my $waste = List::Util::min(1790 / $view->{recycle}{seconds_per_resource},
                               $client->body_status($body_id)->{waste_stored});
   my %res;
   my $sum = 0;
