@@ -614,6 +614,12 @@ sub trade_push {
   return $result;
 }
 
+sub map_get_stars {
+  my ($self, $x1, $y1, $x2, $y2) = @_;
+  my $result = $self->call('map' => get_stars => $x1, $y1, $x2, $y2);
+  return $result;
+}
+
 {
     my %path_for = (
         empire_status                => 'empire/status',
