@@ -150,13 +150,13 @@ for my $type ("waste", @foods, "water", "energy", @ores) {
     my $size = $ship[0]->{hold_size};
     my $used = List::Util::sum(map { $_->{quantity} } @{$items[0]});
     my $amount = List::Util::min($size - $used, -$delta);
-    push(@{$items[0]}, { type => $type, quantity => $amount }) if ($amount);
+    push(@{$items[0]}, { type => $type, quantity => int($amount) }) if ($amount);
   }
   elsif ($delta > 0) {
     my $size = $ship[1]->{hold_size};
     my $used = List::Util::sum(map { $_->{quantity} } @{$items[1]});
     my $amount = List::Util::min($size - $used, $delta);
-    push(@{$items[1]}, { type => $type, quantity => $amount }) if ($amount);
+    push(@{$items[1]}, { type => $type, quantity => int($amount) }) if ($amount);
   }
 }
 

@@ -152,7 +152,11 @@ sub call {
     print $response->content;
     die $@;
   }
-  if ($result->{error}) {
+  if ($result->{error} && $result->{error}{code} == 1010 && $result->{error}{message} =~ /slow down/i) {
+    warn "Request throttling active: $result->{error}{message}\nSleeping for 30 seconds before retry.\n";
+    sleep 30;
+    return $self->call($api, $method, @_);
+  } elsif ($result->{error}) {
     # warn "Request: ".encode_json($message)."\n";
     warn "Error Response: $result->{error}{code}: $result->{error}{message}\n";
     LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
@@ -501,7 +505,7 @@ sub get_probed_stars {
   my $building_id = shift;
 
   my $result = $self->cache_read( type => 'observatory_get_probed_stars', id => $building_id );
-  return $result;
+  return $result if $result;
 
   my $page = 1;
   my @stars;
