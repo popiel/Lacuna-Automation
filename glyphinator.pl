@@ -564,8 +564,10 @@ sub find_shipyards {
     }
     grep { $buildings->{$_}->{level} > 0 and $buildings->{$_}->{efficiency} == 100 }
     keys %$buildings;
+    @yard_ids = sort { $buildings->{$b}->{level} <=> $buildings->{$a}->{level} } @yard_ids;
 
     return if not @yard_ids;
+    return ($yard_ids[0],);
     return @yard_ids;
 }
 

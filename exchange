@@ -16,6 +16,8 @@ my $config_name = "config.json";
 my @body_name;
 my $ship_name;
 my $equalize = 0;
+my $themepark = 0;
+my $stay = 1;
 my $debug = 0;
 my $quiet = 0;
 
@@ -24,6 +26,8 @@ GetOptions(
   "body=s"      => \@body_name,
   "ship|name=s" => \$ship_name,
   "equalize"    => \$equalize,
+  "themepark"   => \$themepark,
+  "stay!"       => \$stay,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
@@ -120,7 +124,17 @@ sub distribute {
   my $rate     = shift;
   my @types    = @_;
 
-  if ($equalize) {
+  if ($themepark && $types[0] eq $foods[0]) {
+    for my $type (@types) {
+      $desire{$type} = List::Util::min(1100, $total{$type} - 50);
+    }
+    my @sorted = sort { $total{$b} <=> $total{$a} } @types;
+    emit("Collecting top foods: " . join(", ", @sorted[0..4]), $planets->{$body_id[0]});
+    for my $type (@sorted[0..4]) {
+      $desire{$type} = List::Util::min(($capacity - 22000) / 5, $total{$sorted[3]}, $total{$type});
+    }
+  }
+  elsif ($equalize) {
     for my $type (@types) {
       $desire{$type} = int($total{$type} / 2);
     }
@@ -150,13 +164,13 @@ for my $type ("waste", @foods, "water", "energy", @ores) {
     my $size = $ship[0]->{hold_size};
     my $used = List::Util::sum(map { $_->{quantity} } @{$items[0]});
     my $amount = List::Util::min($size - $used, -$delta);
-    push(@{$items[0]}, { type => $type, quantity => int($amount) }) if ($amount);
+    push(@{$items[0]}, { type => $type, quantity => int($amount) }) if (int($amount));
   }
   elsif ($delta > 0) {
     my $size = $ship[1]->{hold_size};
     my $used = List::Util::sum(map { $_->{quantity} } @{$items[1]});
     my $amount = List::Util::min($size - $used, $delta);
-    push(@{$items[1]}, { type => $type, quantity => int($amount) }) if ($amount);
+    push(@{$items[1]}, { type => $type, quantity => int($amount) }) if (int($amount));
   }
 }
 
@@ -169,14 +183,14 @@ my $item_text = join(", ", map { "$_->{quantity} $_->{type}" } @{$items[0]});
 emit("Sending $item_text to $planets->{$body_id[1]} on $ship[0]{name}", $planets->{$body_id[0]});
 my $result = $client->trade_push(
   $trade[0]->{id}, $body_id[1], $items[0],
-  { ship_id => $ship[0]->{id}, stay => 1 }
+  { ship_id => $ship[0]->{id}, stay => $stay }
 );
 
 my $item_text = join(", ", map { "$_->{quantity} $_->{type}" } @{$items[1]});
 emit("Sending $item_text to $planets->{$body_id[0]} on $ship[1]{name}", $planets->{$body_id[1]});
 my $result = $client->trade_push(
   $trade[1]->{id}, $body_id[0], $items[1],
-  { ship_id => $ship[1]->{id}, stay => 1 }
+  { ship_id => $ship[1]->{id}, stay => $stay }
 );
 
 sub emit {

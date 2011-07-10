@@ -432,6 +432,19 @@ sub park_party {
   return $result;
 }
 
+sub themepark_operate {
+  my $self = shift;
+  my $building_id = shift;
+
+  my $result = $self->call(themepark => operate => $building_id);
+
+  if ( $result ) {
+      $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'building_view', id => $building_id );
+  }
+  return $result;
+}
+
 sub recycle_recycle {
   my $self = shift;
   my $building_id = shift;

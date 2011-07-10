@@ -295,9 +295,18 @@ for my $j ($[..$#queue) {
     }
     @buildings = @pruned;
     @buildings = grep { $_->{level} < $max_level } @buildings;
+    @buildings = grep { upgrade_check($_) !~ /You can't upgrade.*naturally/ } @buildings;
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     my $building = $buildings[0];
+    unless ($building) {
+      emit("No upgradable buildings for resource $type!") unless $quiet && $sleepy;
+      if ($queue[$j] !~ /^\-/) {
+        splice(@queue, $j, 1, "-$queue[$j]");
+        write_queue();
+      }
+      next;
+    }
     my $message = upgrade_check($building);
     if ($message) {
       emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
@@ -328,6 +337,7 @@ for my $j ($[..$#queue) {
 
 sub upgrade_check {
   my $building = shift;
+  return "Undefined building." unless $building;
   $building = populate_building_with_production($building);
   my $status = $client->body_status($body_id);
   my @message;
@@ -346,6 +356,10 @@ sub populate_building_with_production {
   my @buildings = @_;
   my ($name,$level) = ($building->{name}, $building->{level});
   # print "Viewing data for $level $name\n";
+  unless ($building->{url}) {
+    print "No url for building $building->{id}, name $building->{name}\n";
+    return $building;
+  }
   my $stats = $client->building_stats_for_level($building->{url}, $building->{id}, $building->{level})->{building};
   return { %$building, %$stats };
 }

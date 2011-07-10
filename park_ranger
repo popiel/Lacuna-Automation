@@ -37,11 +37,46 @@ if ($body_name) {
 $body_name = $client->body_status($body_id)->{name};
 $debug and print "Working on body $body_name\n";
 
+my @foods = qw(algae apple bean beetle bread burger
+               cheese chip cider corn fungus lapis
+               meal milk pancake pie potato root
+               shake soup syrup wheat);
+
 my $buildings = $client->body_buildings($body_id);
 $debug and print "Food available: ".$client->body_status($body_id)->{food_stored}."\n";
 exit(0) if $client->body_status($body_id)->{food_stored} < 10000;
 
 my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
+
+my $theme = (grep($_->{name} eq "Theme Park",          @buildings))[0];
+my $dist  = (grep($_->{name} eq "Distribution Center", @buildings))[0];
+
+if ($dist && $theme && !$theme->{work}) {
+  eval { $client->call(distributioncenter => release_reserve => $dist->{id}) } if $dist->{work};
+  my $res = $client->call(distributioncenter => get_stored_resources => $dist->{id})->{resources};
+  my @sorted = sort { $res->{$b} <=> $res->{$a} } grep { $res->{$_} > 1000 } @foods;
+  if (@sorted > 5) {
+    my @list = (
+      { type => $sorted[4], quantity => 1000 },
+      map { { type => $_, quantity => $res->{$_} - 900 } } @sorted[5..$#sorted]
+    );
+    emit("Holding: ". join(", ", map { "$_->{quantity} $_->{type}" } @list));
+    $client->call(distributioncenter => reserve => $dist->{id}, [ @list ]);
+    for (2..int($res->{$sorted[4]} / 1000)) {
+      eval { $client->themepark_operate($theme->{id}); };
+    }
+    $client->call(distributioncenter => release_reserve => $dist->{id});
+    $client->themepark_operate($theme->{id});
+    my $view = $client->call(themepark => view => $theme->{id});
+    emit("Confused!  Expected ".scalar(@sorted)." foods, but using $view->{themepark}{food_type_count} foods.")
+      if scalar(@sorted) != $view->{themepark}{food_type_count};
+    emit("Started theme park ".
+         "using $view->{themepark}{food_type_count} foods ".
+         # "for ".int($res->{$sorted[4]} / 1000)." hours ".
+         "for ".int(($view->{building}{work}{seconds_remaining} + 3590) / 3600)." hours ".
+         "at $view->{building}{happiness_hour} happiness/hour.");
+  }
+}
 
 my @parks = sort { $b->{level} <=> $a->{level} } grep($_->{name} eq "Park", @buildings);
 
@@ -55,10 +90,7 @@ for my $park (@parks) {
   my $party = $client->park_party($park->{id});
   my $after = $client->call(trade => get_stored_resources => $trade);
   my @used;
-  for my $food (qw(algae apple bean beetle bread burger
-                   cheese chip cider corn fungus lapis
-                   meal milk pancake pie potato root
-                   shake soup syrup wheat)) {
+  for my $food (@foods) {
     if ($before->{resources}{$food} > $after->{resources}{$food}) {
       push(@used, ($before->{resources}{$food} - $after->{resources}{$food})." $food");
     }
