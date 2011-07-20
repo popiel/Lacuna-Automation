@@ -126,13 +126,16 @@ sub distribute {
 
   if ($themepark && $types[0] eq $foods[0]) {
     for my $type (@types) {
-      $desire{$type} = List::Util::min(1100, $total{$type} - 50);
+      $desire{$type} = List::Util::min(1100, $total{$type} - 10);
     }
     my @sorted = sort { $total{$b} <=> $total{$a} } @types;
     emit("Collecting top foods: " . join(", ", @sorted[0..4]), $planets->{$body_id[0]});
     for my $type (@sorted[0..4]) {
-      $desire{$type} = List::Util::min(($capacity - 22000) / 5, $total{$sorted[3]}, $total{$type});
+      $desire{$type} = List::Util::min(($capacity - 22000) / 5, $total{$sorted[2]}, $total{$type});
     }
+  }
+  elsif ($equalize && $types[0] eq "waste") {
+    $desire{waste} = int($total{waste} * $capacity / ($capacity + $client->body_status($body_id[1])->{waste_capacity}));
   }
   elsif ($equalize) {
     for my $type (@types) {

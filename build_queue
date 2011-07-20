@@ -45,11 +45,11 @@ $body_name = $client->body_status($body_id)->{name};
 my $buildings = $client->body_buildings($body_id);
 my $ready_in;
 my @builds = grep($_->{pending_build}, values(%{$buildings->{buildings}}));
-if (scalar @builds) {
-    $ready_in = max(map { Client::parse_time($_->{pending_build}{end}) } @builds) - time();
-    emit("builds complete in $ready_in seconds.") unless $quiet_no_body;
-    exit(0);
-}
+# if (scalar @builds) {
+#     $ready_in = max(map { Client::parse_time($_->{pending_build}{end}) } @builds) - time();
+#     emit("builds complete in $ready_in seconds.") unless $quiet_no_body;
+#     exit(0);
+# }
 
 $queue_name ||= "$body_name.queue";
 $queue_name =~ s/\s+/_/g;
@@ -97,6 +97,9 @@ for my $j ($[..$#queue) {
     my $name = $1;
     my ($x, $y);
     ($x, $y) = ($1, $2) if $name =~ s/^(-?\d) (-?\d) //;
+
+    next if @builds;
+
     $buildable ||= $client->body_buildable($body_id);
     my $reqs = $buildable->{buildable}{$name};
     unless ($reqs && $reqs->{build}{can}) {
@@ -121,12 +124,15 @@ for my $j ($[..$#queue) {
       }
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
-      exit(0);
+      $j--;
+      push(@builds, $name);
     }
   }
   if ($command =~ /^upgrade (\d+) (.*)/o) {
     my $level = $1;
     my $name = $2;
+
+    next if @builds;
 
     for my $id (keys %{$buildings->{buildings}}) {
       my $building = $buildings->{buildings}{$id};
@@ -155,8 +161,56 @@ for my $j ($[..$#queue) {
         }
         @queue = map { s/^\-//; $_; } @queue;
         write_queue();
-        exit(0);
+        $j--;
+        push(@builds, $name);
+        last;
       }
+    }
+  }
+  if ($command =~ /^shipbuild (.*)/o) {
+    my $name = $1;
+
+    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my $yard = (grep { $_->{name} eq "Shipyard" } @buildings)[0];
+
+    next unless $yard;
+    my $queue = $client->yard_queue($yard->{id});
+    # emit(encode_json($queue));
+    next if @{$queue->{ships_building}};
+
+    my $buildable = $client->yard_buildable($yard->{id});
+    my $ship = $buildable->{buildable}{$name};
+    if (!$ship) {
+      emit("Unrecognized ship type $name; supported types include: ". join(", ", sort keys(%{$buildable->{buildable}}))) unless $quiet && $sleepy;
+      if ($queue[$j] !~ /^\-/) {
+        splice(@queue, $j, 1, "-$queue[$j]");
+        write_queue();
+      }
+      next;
+    }
+    if (!$ship->{can}) {
+      emit("Cannot build ship $name: $ship->{reason}[1]") unless $quiet && $sleepy;
+      if ($queue[$j] !~ /^\-/) {
+        splice(@queue, $j, 1, "-$queue[$j]");
+        write_queue();
+      }
+      next;
+    }
+    my $build = eval { $client->yard_build($yard->{id}, $name) };
+    if ($build) {
+      emit("Building ship $name, complete at ".Client::format_time(Client::parse_time($build->{ships_building}[0]{date_completed})));
+      splice(@queue, $j, 1);
+      if ($rebuild) {
+        emit("Requeueing $name at the front of the queue");
+        unshift(@queue, "$priority++shipbuild $name\n");
+      }
+      elsif ($requeue) {
+        emit("Requeueing $name at the back of the queue\n");
+        push(@queue, "+shipbuild $name\n");
+      }
+      @queue = map { s/^\-//; $_; } @queue;
+      $j--;
+      write_queue();
     }
   }
   if ($command =~ /^resources(.*)/o) {
@@ -164,6 +218,8 @@ for my $j ($[..$#queue) {
     my @args = split(/,/, $args);
     grep(s/^\s*//, @args);
     grep(s/\s*$//, @args);
+
+    next if @builds;
 
     my $focus = "stored";
     my $max_level = 15;
@@ -211,7 +267,7 @@ for my $j ($[..$#queue) {
             emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
             @queue = map { s/^\-//; $_; } @queue;
             write_queue();
-            exit(0);
+            push(@builds, $building);
           }
         }
 
@@ -237,7 +293,7 @@ for my $j ($[..$#queue) {
             emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
             @queue = map { s/^\-//; $_; } @queue;
             write_queue();
-            exit(0);
+            push(@builds, $building);
           }
         }
       }
@@ -330,7 +386,7 @@ for my $j ($[..$#queue) {
       emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
-      exit(0);
+      push(@builds, $building);
     }
   }
 }

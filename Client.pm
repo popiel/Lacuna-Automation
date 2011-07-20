@@ -608,6 +608,8 @@ sub yard_build {
   my $type = shift;
 
   my $result = $self->call(shipyard => build_ship => $building_id, $type);
+  $self->cache_invalidate( type => 'buildable', id => $building_id );
+  $self->cache_invalidate( type => 'shipyard_view_build_queue', id => $building_id );
   return $result;
 }
 
@@ -619,6 +621,25 @@ sub trade_push {
   my $options = shift;
 
   my $result = $self->call(trade => push_items => $building_id, $target_id, $items, $options);
+  if ($result) {
+    $self->cache_invalidate( type => 'body_status', id => $target_id );
+    for my $body ($target_id, $result->{status}{body}{id}) {
+      my $buildings = $self->body_buildings($body);
+      for my $id (keys %{$buildings->{buildings}}) {
+        $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $id );
+      }
+    }
+  }
+  return $result;
+}
+
+sub transporter_push {
+  my $self = shift;
+  my $building_id = shift;
+  my $target_id = shift;
+  my $items = shift;
+
+  my $result = $self->call(transporter => push_items => $building_id, $target_id, $items);
   if ($result) {
     $self->cache_invalidate( type => 'body_status', id => $target_id );
     for my $body ($target_id, $result->{status}{body}{id}) {
