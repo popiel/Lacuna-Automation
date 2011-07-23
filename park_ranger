@@ -15,12 +15,14 @@ my $config_name = "config.json";
 my $body_name;
 my $theme_only;
 my $debug = 0;
+my $test_embassy;
 
 GetOptions(
   "config=s"  => \$config_name,
   "body=s"    => \$body_name,
   "themeonly" => \$theme_only,
   "debug"     => \$debug,
+  "test"      => \$test_embassy,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
@@ -49,6 +51,11 @@ exit(0) if $client->body_status($body_id)->{food_stored} < 10000;
 
 my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
 
+if ($test_embassy) {
+  embassy_fetch();
+  exit(0);
+}
+
 my $theme = (grep($_->{name} eq "Theme Park",          @buildings))[0];
 my $dist  = (grep($_->{name} eq "Distribution Center", @buildings))[0];
 
@@ -71,39 +78,7 @@ if ($dist && $theme && !$theme->{work}) {
     }
     my $embassy = (grep($_->{name} eq "Embassy", @buildings))[0];
     if ($embassy && int(($view->{building}{work}{seconds_remaining} + 3590) / 3600) > 6) {
-      my $stash = $client->call(embassy => view_stash => $embassy->{id});
-      my %wanted = map { ( $_, (1010 - $stash->{stored}{$_}) ) } grep { $stash->{stored}{$_} < 1010 && $stash->{stored}{$_} + $stash->{stash}{$_} > 1010 } @foods;
-      while (List::Util::sum(values(%wanted)) > $stash->{max_exchange_size}) {
-        delete($wanted{(sort { $wanted{$b} <=> $wanted{$a} } keys(%wanted))[0]});
-      }
-      my $amount = List::Util::sum(values(%wanted));
-      my %extra = $stash->{stored};
-      delete($extra{$_}) for keys(%wanted);
-      for my $food (@foods) {
-        if ($wanted{$food}) {
-          delete($extra{$food});
-        } elsif ($extra{$food} > 1010) {
-          $extra{$food} -= 1010;
-        }
-      }
-      my %giving;
-      while ($amount) {
-        my @ordered = sort { $stash->{stash}{$a} + $giving{$a} <=> $stash->{stash}{$b} + $giving{$b} } grep { $giving{$_} < $extra{$_} } keys(%extra);
-        last unless @ordered;
-        my $top = 1;
-        $top++ while $stash->{stash}{$ordered[$top]} + $giving{$ordered[$top]} == $stash->{stash}{$ordered[0]} + $giving{$ordered[0]};
-        if ($amount >= $top) {
-          my $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
-                                     ($stash->{stash}{$ordered[$top]} + $giving{$ordered[$top]}) - ($stash->{stash}{$ordered[0]} + $giving{$ordered[0]}),
-                                     int($amount / $top));
-          $amount -= $step * $top;
-          $giving{$_} += $step for @ordered[0..($top-1)];
-        } else {
-          $giving{$_}++ for @ordered[0..($amount-1)];
-        }
-      }
-      emit("Exchanging ". join(", ", map { "$giving{$_} $_" } keys(%giving)). " for ". join(", ", map { "$wanted{$_} $_" } keys(%wanted)));
-      eval { $client->call(embassy => exchange_with_stash => $embassy->{id}, { %giving }, { %wanted }); };
+      embassy_fetch($embassy);
     }
     $client->call(distributioncenter => release_reserve => $dist->{id});
     $client->themepark_operate($theme->{id});
@@ -138,6 +113,52 @@ for my $park (@parks) {
     }
   }
   emit("Threw level $park->{level} party for $party->{party}{happiness} happiness, using ".join(", ", @used).".");
+}
+
+sub embassy_fetch {
+  my $embassy = shift;
+
+  $embassy = (grep($_->{name} eq "Embassy", @buildings))[0] unless $embassy;
+
+  my $stash = $client->call(embassy => view_stash => $embassy->{id});
+  my %wanted = map { ( $_, (1010 - $stash->{stored}{$_}) ) } grep { $stash->{stored}{$_} < 1010 && $stash->{stored}{$_} + $stash->{stash}{$_} > 1010 } @foods;
+  while (List::Util::sum(values(%wanted)) > $stash->{max_exchange_size}) {
+    delete($wanted{(sort { $wanted{$b} <=> $wanted{$a} } keys(%wanted))[0]});
+  }
+  my $amount = List::Util::sum(values(%wanted));
+  my %extra = %{$stash->{stored}};
+  delete($extra{$_}) for keys(%wanted);
+  for my $food (@foods) {
+    if ($wanted{$food}) {
+      delete($extra{$food});
+    } elsif ($extra{$food} > 1010) {
+      $extra{$food} -= 1010;
+    }
+  }
+  emit(join("\n", "Extra resources:", map { sprintf("%9d %s", $extra{$_}, $_) } keys(%extra))) if $debug;
+  my %giving;
+  while ($amount) {
+    my @ordered = sort { $stash->{stash}{$a} + $giving{$a} <=> $stash->{stash}{$b} + $giving{$b} } grep { $giving{$_} < $extra{$_} } keys(%extra);
+#    emit("Ordered resources: ". join(", ", @ordered)) if $debug;
+    emit(join("\n", "Ordered resources:", map { sprintf("%9d %s", $stash->{stash}{$_} + $giving{$_}, $_) } @ordered)) if $debug;
+    last unless @ordered;
+    my $top = 1;
+    $top++ while $stash->{stash}{$ordered[$top]} + $giving{$ordered[$top]} == $stash->{stash}{$ordered[0]} + $giving{$ordered[0]};
+    emit("Top: $top, remaining: $amount") if $debug;
+    if ($amount >= $top) {
+      my $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
+                                 ($stash->{stash}{$ordered[$top]} + $giving{$ordered[$top]}) - ($stash->{stash}{$ordered[0]} + $giving{$ordered[0]}),
+                                 int($amount / $top));
+      $amount -= $step * $top;
+      $giving{$_} += $step for @ordered[0..($top-1)];
+    } else {
+      $giving{$_}++ for @ordered[0..($amount-1)];
+    }
+    emit(join("\n", "Giving resources:", map { sprintf("%9d %s", $giving{$_}, $_) } keys(%giving))) if $debug;
+  }
+  emit(join("\n", "Final stash:", map { sprintf("%9d %s", $stash->{stash}{$_} + $giving{$_}, $_) } keys(%extra))) if $debug;
+  emit("Exchanging ". join(", ", map { "$giving{$_} $_" } keys(%giving)). " for ". join(", ", map { "$wanted{$_} $_" } keys(%wanted)));
+  eval { $client->call(embassy => exchange_with_stash => $embassy->{id}, { %giving }, { %wanted }); } unless $test_embassy;
 }
 
 sub emit {
