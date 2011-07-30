@@ -719,4 +719,33 @@ sub cache_invalidate {
     return;
 }
 
+sub select_exchange {
+  my $self     =   $_[0];
+  my %existing = %{$_[1]};
+  my %extra    = %{$_[2]};
+  my %wanted   = %{$_[3]};
+
+  my $amount;
+  my %giving;
+  while (($amount = List::Util::sum(values(%wanted)) - List::Util::sum(values(%giving))) > 0) {
+    my @ordered = sort { $existing{$a} + $giving{$a} <=> $existing{$b} + $giving{$b} } grep { $giving{$_} < $extra{$_} } keys(%extra);
+#    emit("Ordered resources: ". join(", ", @ordered)) if $debug;
+#    emit(join("\n", "Ordered resources:", map { sprintf("%9d %s", $existing{$_} + $giving{$_}, $_) } @ordered)) if $debug;
+    last unless @ordered;
+    my $top = 1;
+    $top++ while $existing{$ordered[$top]} + $giving{$ordered[$top]} == $existing{$ordered[0]} + $giving{$ordered[0]};
+#    emit("Top: $top, remaining: $amount") if $debug;
+    if ($amount >= $top) {
+      my $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
+                                 ($existing{$ordered[$top]} + $giving{$ordered[$top]}) - ($existing{$ordered[0]} + $giving{$ordered[0]}),
+                                 int($amount / $top));
+      $giving{$_} += $step for @ordered[0..($top-1)];
+    } else {
+      $giving{$_}++ for @ordered[0..($amount-1)];
+    }
+#    emit(join("\n", "Giving resources:", map { sprintf("%9d %s", $giving{$_}, $_) } keys(%giving))) if $debug;
+  }
+  return %giving;
+}
+
 1;
