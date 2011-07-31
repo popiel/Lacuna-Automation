@@ -67,7 +67,7 @@ while (List::Util::sum(values(%give)) > $result->{max_exchange_size}) {
 }
 
 my %extra = map { $_ => -$delta{$_} } grep { $delta{$_} < 0 } keys %stash;
-my %take = $client->select_exchange(\%stash, \%extra, \%give);
+my %take = $client->select_exchange(\%stored, \%extra, \%give);
 
 emit(join("\n", "Final stash:", map { sprintf("%9d %s", $stash{$_} + $give{$_} - $take{$_}, $_) } sort keys(%resources))) if $debug;
 emit("Exchanging ". join(", ", map { "$give{$_} $_" } sort keys(%give)). " for ". join(", ", map { "$take{$_} $_" } sort keys(%take)));

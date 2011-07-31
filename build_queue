@@ -272,30 +272,32 @@ for my $j ($[..$#queue) {
           }
         }
 
-        $type = (sort { $ratio{$b} <=> $ratio{$a} } grep { !$ignore{$_} } keys %ratio)[0];
+        $type = (sort { $ratio{$b} <=> $ratio{$a} } grep { !$ignore{$_} } keys %ratio)[2];
         if ($ratio{$type} > 0.95) {
           emit("Near storage limit for $type") unless $quiet && $sleepy;
           my @storage = sort { $a->{level} <=> $b->{level} }
                         grep { $_->{name} =~ /^$type (Storage|Reserve)/i }
                         @buildings;
-          my $building = $storage[0];
-          my $message = upgrade_check($building);
-          if ($message) {
-            emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
-            if ($queue[$j] !~ /^\-/) {
-              splice(@queue, $j, 1, "-$queue[$j]");
-              write_queue();
+          if (@storage) {
+            my $building = $storage[0];
+            my $message = upgrade_check($building);
+            if ($message) {
+              emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
+              if ($queue[$j] !~ /^\-/) {
+                splice(@queue, $j, 1, "-$queue[$j]");
+                write_queue();
+              }
+              next;
             }
-            next;
-          }
-          else {
-            my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
-            emit("Near storage limit for $type") if $quiet && $sleepy;
-            emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
-            @queue = map { s/^\-//; $_; } @queue;
-            write_queue();
-            push(@builds, $building);
-            next;
+            else {
+              my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+              emit("Near storage limit for $type") if $quiet && $sleepy;
+              emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+              @queue = map { s/^\-//; $_; } @queue;
+              write_queue();
+              push(@builds, $building);
+              next;
+            }
           }
         }
       }
