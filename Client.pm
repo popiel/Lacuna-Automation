@@ -371,6 +371,17 @@ sub building_upgrade {
   }
 }
 
+sub halls_sacrifice {
+  my $self = shift;
+  my $hall_id = shift;
+  my $building_id = shift;
+
+  my $result = eval { $self->call(hallsofvrbansk => sacrifice_to_upgrade => $hall_id, $building_id); };
+  $self->cache_invalidate( type => 'building_view', id => $building_id                );
+  $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+  return $result;
+}
+
 sub building_repair {
   my $self = shift;
   my $url = shift;

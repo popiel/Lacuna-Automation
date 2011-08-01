@@ -167,6 +167,33 @@ for my $j ($[..$#queue) {
       }
     }
   }
+  if ($command =~ /^sacrifice (\d+) (.*)/o) {
+    my $level = $1;
+    my $name = $2;
+
+    next if @builds;
+
+    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @halls = grep { $_->{name} eq "Halls of Vrbansk" } @buildings;
+    my $target = (grep { $_->{name} eq $name && (!$level || $_->{level} == $level) } @buildings)[0];
+    if ($target) {
+      if (@halls <= $target->{level}) {
+        emit("Insufficient halls to upgrade $name: have ".scalar(@halls).", need ".($target->{level}+1)) unless $quiet && $sleepy;
+        if ($queue[$j] !~ /^\-/) {
+          splice(@queue, $j, 1, "-$queue[$j]");
+          write_queue();
+        }
+        next;
+      }
+      emit("Sacrificing ".($target->{level}+1)." halls to upgrade $name");
+      $client->halls_sacrifice($halls[0]{id}, $target->{id});
+      @queue = map { s/^\-//; $_; } @queue;
+      write_queue();
+      $j--;
+      push(@builds, $name);
+      next;
+    }
+  }
   if ($command =~ /^shipbuild (.*)/o) {
     my $name = $1;
 
