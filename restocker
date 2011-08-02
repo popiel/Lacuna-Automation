@@ -17,12 +17,16 @@ my $body_name;
 my $queue_name;
 my $debug = 0;
 my $quiet = 0;
+my $min_exchange = 2000;
+
+$min_exchange = 100 if (gmtime(time))[2] == 23; # Be more eager to exchange at the end of the RPC day
 
 GetOptions(
   "config=s" => \$config_name,
   "body=s"   => \$body_name,
   "debug"    => \$debug,
   "quiet"    => \$quiet,
+  "min_exchange|minexchange=i" => \$min_exchange,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
@@ -58,7 +62,7 @@ my %delta = map { $_ => $ideal - $stash{$_} } keys %resources;
 
 my %give = map { $_ => List::Util::min($stored{$_}, $delta{$_}) } grep { $delta{$_} > 0 && $stored{$_} > 0 } keys %resources;
 my $amount = List::Util::sum(values(%give));
-if ($amount < 2000) {
+if ($amount < $min_exchange) {
   emit("Too little to exchange: $amount");
   exit(0);
 }
