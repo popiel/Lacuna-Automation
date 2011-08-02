@@ -453,6 +453,9 @@ sub populate_building_with_production {
 
 sub emit {
   my $message = shift;
+  our $last_message;
+  return if $message eq $last_message;
+  $last_message = $message;
   print Client::format_time(time())." $body_name: $message\n";
 }
 
