@@ -187,6 +187,7 @@ for my $j ($[..$#queue) {
       }
       emit("Sacrificing ".($target->{level}+1)." halls to upgrade $name");
       $client->halls_sacrifice($halls[0]{id}, $target->{id});
+      splice(@queue, $j, 1);
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
       $j--;
