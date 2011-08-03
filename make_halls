@@ -38,9 +38,11 @@ eval {
   my $planets = $client->empire_status->{planets};
 
   my $for_id;
-  $for_id = (grep { $planets->{$_} =~ /$for_name/ } keys(%$planets))[0];
-  die "No matching planet for name $for_name\n" if $for_name && !$for_id;
-  $for_name = $planets->{$for_id};
+  if ($for_name) {
+    $for_id = (grep { $planets->{$_} =~ /$for_name/ } keys(%$planets))[0];
+    die "No matching planet for name $for_name\n" if $for_name && !$for_id;
+    $for_name = $planets->{$for_id};
+  }
 
   push(@body_name, sort values(%$planets)) unless @body_name;
   warn "Looking at bodies ".join(", ", @body_name)."\n" if $debug;
