@@ -8,7 +8,7 @@ use Date::Manip;
 use Getopt::Long;
 use IO::Handle;
 use JSON::XS;
-use List::Util qw(max);
+use List::Util qw(max first);
 
 autoflush STDOUT 1;
 autoflush STDERR 1;
@@ -92,6 +92,36 @@ for my $j ($[..$#queue) {
     } else {
       exit(0);
     }
+  }
+  if ($command =~ /^demolish (.*)/o) {
+    my $name = $1;
+    my ($x, $y);
+    ($x, $y) = ($1, $2) if $name =~ s/^(-?\d) (-?\d) //;
+    my $level;
+    $level = $1 if $name =~ s/^(\d+) //;
+
+    next if @builds;
+
+    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @targets = sort { $a->{level} <=> $b->{level} } grep { $_->{name} eq $name } @buildings;
+    @targets = grep { $_->{level} == $level } @targets if $level;
+    @targets = grep { $_->{x} == $x && $_->{y} == $y } @targets if $x || $y;
+    my $target = $targets[0];
+
+    unless ($target) {
+      emit("Cannot demolish $name: no such building") unless $quiet && $sleepy;
+      if (!$quiet) {
+        splice(@queue, $j, 1, "-$queue[$j]");
+        write_queue();
+      }
+      next;
+    }
+    $client->building_demolish($target->{url}, $target->{id});
+    emit("Demolished $name at $target->{x},$target->{y}");
+    splice(@queue, $j, 1);
+    @queue = map { s/^\-//; $_; } @queue;
+    write_queue();
+    $j--;
   }
   if ($command =~ /^build (.*)/o) {
     my $name = $1;
@@ -344,6 +374,7 @@ for my $j ($[..$#queue) {
     @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
     for my $building (@buildings) {
       $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / ($status->{"${_}_hour"} || 0.001) } qw(food ore water energy));
+      $building->{delay} *= 100 if grep { $_ eq 'avoid delay' } @args;
       $building->{cost_time} = List::Util::max($building->{delay} + $building->{upgrade}{cost}{time} / 3600, map { $building->{upgrade}{cost}{$type} / ($status->{"${_}_hour"} || 1) } qw(food ore water energy));
       $building->{payoff} = $building->{upgrade}{production}{"${type}_hour"} - $building->{"${type}_hour"};
       if ($type eq "ore" && $building->{name} eq "Ore Refinery") {
@@ -363,6 +394,7 @@ for my $j ($[..$#queue) {
       $building->{payoff_ratio} = $building->{payoff} / List::Util::max(0.1, List::Util::max($building->{cost_time}, $building->{cost_prod}));
     }
     @buildings = grep { $_->{payoff_ratio} > 0 } @buildings;
+    @buildings = grep { upgrade_check($_) !~ /You can't upgrade.*naturally/ } @buildings;
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     if (!($quiet && $sleepy)) {

@@ -335,6 +335,18 @@ sub building_build {
   return $result;
 }
 
+sub building_demolish {
+  my $self = shift;
+  my $url = shift;
+  my $building_id = shift;
+
+  my $result = $self->call($url => demolish => $building_id);
+  $self->cache_invalidate( type => 'building_view', id => $building_id                );
+  $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+  $self->cache_invalidate( type => 'buildable',     id => $result->{status}{body}{id} );
+  return $result;
+}
+
 sub building_upgrade {
   my $self = shift;
   my $url = shift;
