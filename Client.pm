@@ -681,6 +681,7 @@ sub map_get_stars {
         observatory_get_probed_stars => 'building/%d/get_probed_stars',
         shipyard_view_build_queue    => 'building/%d/view_build_queue',
         session                      => 'session',
+        misc                         => 'misc/%s',
     );
 
     sub _cache_path {
@@ -736,25 +737,38 @@ sub select_exchange {
   my %extra    = %{$_[2]};
   my %wanted   = %{$_[3]};
 
+  # ::emit(join("\n", "Need to balance ".List::Util::sum(values(%wanted)).":", map { sprintf("%9d %s", $wanted{$_}, $_) } sort keys %wanted));
+  # ::emit(join("\n", "Can work with ".List::Util::sum(values(%extra)).":", map { sprintf("%9d %s", $extra{$_}, $_) } sort keys %extra));
+
+
   my $amount;
   my %giving;
+  my $iteration = 0;
   while (($amount = List::Util::sum(values(%wanted)) - List::Util::sum(values(%giving))) > 0) {
+    return if $iteration++ > 150;
     my @ordered = sort { $existing{$a} + $giving{$a} <=> $existing{$b} + $giving{$b} } grep { $giving{$_} < $extra{$_} } keys(%extra);
-#    emit("Ordered resources: ". join(", ", @ordered)) if $debug;
-#    emit(join("\n", "Ordered resources:", map { sprintf("%9d %s", $existing{$_} + $giving{$_}, $_) } @ordered)) if $debug;
+    # ::emit("Ordered resources: ". join(", ", @ordered));
+    # ::emit(join("\n", "Ordered resources:", map { sprintf("%9d %s", $existing{$_} + $giving{$_}, $_) } @ordered));
     last unless @ordered;
     my $top = 1;
     $top++ while $existing{$ordered[$top]} + $giving{$ordered[$top]} == $existing{$ordered[0]} + $giving{$ordered[0]};
-#    emit("Top: $top, remaining: $amount") if $debug;
+    # ::emit("Top: $top, remaining: $amount");
     if ($amount >= $top) {
-      my $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
-                                 ($existing{$ordered[$top]} + $giving{$ordered[$top]}) - ($existing{$ordered[0]} + $giving{$ordered[0]}),
-                                 int($amount / $top));
-      $giving{$_} += $step for @ordered[0..($top-1)];
+      my $step;
+      if ($top > 1 && $top < @ordered) {
+        $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
+                                ($existing{$ordered[$top]} + $giving{$ordered[$top]}) - ($existing{$ordered[0]} + $giving{$ordered[0]}),
+                                int($amount / $top));
+        $giving{$_} += $step for @ordered[0..($top-1)];
+      } else {
+        $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
+                                int($amount / $top));
+        $giving{$_} += $step for @ordered[0..($top-1)];
+      }
     } else {
       $giving{$_}++ for @ordered[0..($amount-1)];
     }
-#    emit(join("\n", "Giving resources:", map { sprintf("%9d %s", $giving{$_}, $_) } keys(%giving))) if $debug;
+    # ::emit(join("\n", "Giving resources:", map { sprintf("%9d %s", $giving{$_}, $_) } keys(%giving)));
   }
   return %giving;
 }

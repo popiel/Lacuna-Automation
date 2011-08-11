@@ -60,6 +60,8 @@ my %resources = (%stored, %stash);
 my $ideal = int(500000 / 44); # stash capacity / types
 my %delta = map { $_ => $ideal - $stash{$_} } keys %resources;
 
+# emit(join("\n", "Delta stash:", map { sprintf("%9d %s", $delta{$_}, $_) } sort keys(%resources))) if $debug;
+
 my %give = map { $_ => List::Util::min($stored{$_}, $delta{$_}) } grep { $delta{$_} > 0 && $stored{$_} > 0 } keys %resources;
 my $amount = List::Util::sum(values(%give));
 if ($amount < $min_exchange) {
@@ -67,6 +69,9 @@ if ($amount < $min_exchange) {
   exit(0);
 }
 while (List::Util::sum(values(%give)) > $result->{max_exchange_size}) {
+  emit("Reducing exchange size: ".List::Util::sum(values(%give))." > $result->{max_exchange_size}") if $debug;
+  my $which = List::Util::first { $give{$b} <=> $give{$a} } keys %give;
+  emit("Eliminating $give{$which} $which") if $debug;
   delete $give{(sort { $give{$b} <=> $give{$a} } keys %give)[0]};
 }
 
