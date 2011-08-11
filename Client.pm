@@ -767,7 +767,7 @@ sub select_exchange {
     # ::emit("Top: $top, remaining: $amount");
     if ($amount >= $top) {
       my $step;
-      if ($top > 1 && $top < @ordered) {
+      if ($top < @ordered) {
         $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
                                 ($existing{$ordered[$top]} + $giving{$ordered[$top]}) - ($existing{$ordered[0]} + $giving{$ordered[0]}),
                                 int($amount / $top));
