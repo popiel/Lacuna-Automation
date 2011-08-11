@@ -13,13 +13,14 @@ autoflush STDERR 1;
 
 my $config_name = "config.json";
 my $body_name;
-my $queue_name;
+my $min_waste = 100000;
 my $debug = 0;
 
 GetOptions(
-  "config=s" => \$config_name,
-  "body=s"   => \$body_name,
-  "debug"    => \$debug,
+  "config=s"    => \$config_name,
+  "body=s"      => \$body_name,
+  "min_waste=i" => \$min_waste,
+  "debug"       => \$debug,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
@@ -39,7 +40,7 @@ my $status = $client->body_status($body_id);
 $body_name = $status->{name};
 emit("Waste stored: $status->{waste_stored}") if $debug;
 if ($client->body_status($body_id)->{waste_hour} > 0) {
-  exit(0) if $status->{waste_stored} < 150;
+  exit(0) if $status->{waste_stored} < $min_waste;
 }
 else {
   exit(0) if $status->{waste_stored} < List::Util::max($status->{waste_capacity} * 3 / 4, $status->{waste_capacity} - 100000);
