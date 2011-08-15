@@ -140,7 +140,7 @@ for my $j ($[..$#queue) {
       }
       next;
     }
-    my $build = $client->body_build($body_id, $name, $x, $y);
+    my $build = eval { $client->body_build($body_id, $name, $x, $y) };
     if ($build) {
       emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
       splice(@queue, $j, 1);
@@ -156,6 +156,13 @@ for my $j ($[..$#queue) {
       write_queue();
       $j--;
       push(@builds, $name);
+    } else {
+      if (my $e = Exception::Class->caught('LacunaRPCException')) {
+        emit("Couldn't build $name: ".$e->code." ".$e->text);
+      } else {
+        my $e = Exception::Class->caught();
+        ref $e ? $e->rethrow : die $e;
+      }
     }
   }
   if ($command =~ /^upgrade (\d+) (.*)/o) {
