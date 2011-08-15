@@ -74,8 +74,9 @@ for my $ship (@ships) {
   my @items;
   my $pc = 0;
   my $gc = 0;
-  while (@{$plans->{plans}} && $space > $plans->{cargo_space_used_each}) {
-    my $plan = shift @{$plans->{plans}};
+  my @plans = grep { $_->{name} ne "Halls of Vrbansk" } @{$plans->{plans}};
+  while (@plans && $space > $plans->{cargo_space_used_each}) {
+    my $plan = shift @plans;
     push(@items, { type => "plan", plan_id => $plan->{id} });
     $space -= $plans->{cargo_space_used_each};
     $pc++;
