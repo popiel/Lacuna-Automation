@@ -700,7 +700,9 @@ sub map_get_stars {
         my ($self, $type, $id, $level) = @_;
 
         my ($host) = ( $self->{uri} =~ m|^\w+://(\w+)\.lacunaexpanse\.com$|i );
-        return sprintf "cache/%s_%s/$path_for{ $type }", grep { defined $_ } $self->{empire_name}, $host, $id, $level;
+        my $name = $self->{empire_name};
+        $name =~ s/\W/_/g;
+        return sprintf "cache/%s_%s/$path_for{ $type }", grep { defined $_ } $name, $host, $id, $level;
     }
 }
 
