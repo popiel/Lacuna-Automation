@@ -176,7 +176,7 @@ for my $j ($[..$#queue) {
       print "Matching against $building->{level} $building->{name}\n" if $debug;
       if ($building->{name} eq $name && (!$level || $building->{level} == $level)) {
         $building->{id} = $id;
-        my $message = upgrade_check($building);
+        my $message = upgrade_check($building, 1);
         if ($message) {
           emit("Cannot upgrade $level $name: $message") unless $quiet && $sleepy;
           if ($queue[$j] !~ /^\-/) {
@@ -317,7 +317,7 @@ for my $j ($[..$#queue) {
         if ($storage[0]{level} < $storage[$#storage]{level}) {
           emit("Equalizing storage levels") unless $quiet && $sleepy;
           my $building = $storage[0];
-          my $message = upgrade_check($building);
+          my $message = upgrade_check($building, 1);
           if ($message) {
             emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
             if ($queue[$j] !~ /^\-/) {
@@ -345,7 +345,7 @@ for my $j ($[..$#queue) {
                         @buildings;
           if (@storage) {
             my $building = $storage[0];
-            my $message = upgrade_check($building);
+            my $message = upgrade_check($building, 1);
             if ($message) {
               emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
               if ($queue[$j] !~ /^\-/) {
@@ -434,7 +434,7 @@ for my $j ($[..$#queue) {
       }
       next;
     }
-    my $message = upgrade_check($building);
+    my $message = upgrade_check($building, 1);
     if ($message) {
       emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
       if ($queue[$j] !~ /^\-/) {
@@ -464,11 +464,24 @@ for my $j ($[..$#queue) {
 
 sub upgrade_check {
   my $building = shift;
+  my $side_effects = shift;
   return "Undefined building." unless $building;
   $building = populate_building_with_production($building);
+  my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+  my $depot = List::Util::first { $_->{url} =~ /subspacesupplydepot/ } @buildings;
   my $status = $client->body_status($body_id);
   my @message;
   for (qw(food ore water energy)) {
+    while ($side_effects && $depot && $depot->{work}{seconds_remaining} >= 3600 &&
+        $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_} &&
+        $status->{"${_}_stored"} < $status->{"${_}_capacity"} - 3600) {
+      my $result = eval { $client->depot_transmit($depot->{id}, $_) };
+      last unless $result;
+      if ($result && $result->{building}) {
+        $depot = { %$depot, %{$result->{building}} };
+      }
+      $status = $client->body_status($body_id);
+    }
     push(@message, "$_ (".$status->{"${_}_stored"}."/".$building->{upgrade}{cost}{$_}.")")
       if $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_};
   }
