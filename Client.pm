@@ -675,6 +675,18 @@ sub transporter_push {
   return $result;
 }
 
+sub depot_transmit {
+  my $self = shift;
+  my $building_id = shift;
+  my $type = shift;
+
+  my $result = $self->call(subspacesupplydepot => "transmit_$type" => $building_id);
+  if ($result) {
+    $self->cache_invalidate( type => 'body_buildable', id => $building_id );
+  }
+  return $result;
+}
+
 sub map_get_stars {
   my ($self, $x1, $y1, $x2, $y2) = @_;
   my $result = $self->call('map' => get_stars => $x1, $y1, $x2, $y2);
