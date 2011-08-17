@@ -1,0 +1,50 @@
+#!/usr/bin/perl
+
+use strict;
+
+use Client;
+use Getopt::Long;
+use JSON::XS;
+
+my $config_name = "config.json";
+my $body_name;
+my $name = "Trade|Subspace|Mission|Port";
+
+GetOptions(
+  "config=s" => \$config_name,
+  "name=s"   => \$name,
+) or die "$0 --config=foo.json --body=Bar\n";
+
+my $client = Client->new(config => $config_name);
+my $planets = $client->empire_status->{planets};
+
+my %plans;
+for my $body_id (keys(%$planets)) {
+  $body_name = $planets->{$body_id};
+  my $buildings = $client->body_buildings($body_id);
+  my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
+  my %buildings = map { $_->{name}, $_->{id} } @buildings;
+  my $parliament = $buildings{Parliament};
+  next unless $parliament;
+
+  my $props = $client->call(parliament => view_propositions => $parliament);
+  for my $prop (@{$props->{propositions}}) {
+    next unless $prop->{name} =~ /^Upgrade|Install/;
+    next if exists $prop->{my_vote};
+    emit("Approving proposition $prop->{name}");
+    my $result = eval { $client->call(parliament => cast_vote => $parliament, $prop->{id}, 1) };
+    if (!$result) {
+      if (my $e = Exception::Class->caught('LacunaRPCException')) {
+        emit("Couldn't vote: ".$e->code." ".$e->text);
+      } else {
+        my $e = Exception::Class->caught();
+        ref $e ? $e->rethrow : die $e;
+      }
+    }
+  }
+}
+
+sub emit {
+  my $message = shift;
+  print Client::format_time(time())." $body_name: $message\n";
+}
