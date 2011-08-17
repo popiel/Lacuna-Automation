@@ -29,7 +29,7 @@ for my $body_id (keys(%$planets)) {
 
   my $props = $client->call(parliament => view_propositions => $parliament);
   for my $prop (@{$props->{propositions}}) {
-    next unless $prop->{name} =~ /^Upgrade|Install/;
+    next unless $prop->{name} =~ /^Upgrade|Install|Repair/;
     next if exists $prop->{my_vote};
     emit("Approving proposition $prop->{name}");
     my $result = eval { $client->call(parliament => cast_vote => $parliament, $prop->{id}, 1) };
