@@ -45,7 +45,7 @@ for my $body_id (keys(%$planets)) {
 
 my @trash;
 my $inbox = $client->call(inbox => 'view_inbox');
-emit("inbox result: ".encode_json($inbox));
+emit("inbox result: ".encode_json($inbox)) if $debug;
 for my $message (@{$inbox->{messages}}) {
   emit("Inspecting message tag @{$message->{tags}}; subject $message->{subject}") if $debug;
   if (grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair)/) {
@@ -54,7 +54,7 @@ for my $message (@{$inbox->{messages}}) {
   }
 }
 my $result = $client->call(inbox => trash_messages => \@trash);
-emit("trash result: ".encode_json($result));
+emit("trash result: ".encode_json($result)) if $debug;
 my $count = @{$result->{success}};
 emit("Trashed $count inbox messages.");
 
