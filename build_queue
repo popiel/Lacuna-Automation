@@ -62,7 +62,8 @@ close $file;
 
 my $buildable;
 my $abort;
-for my $j ($[..$#queue) {
+# This needs to be the C-like version of for, because I dink around with $j in some cases
+for (my $j = $[; $j <= $#queue; $j++) {
   exit(0) if $abort;
   my $command = $queue[$j];
   chomp $command;
@@ -472,9 +473,15 @@ sub upgrade_check {
   my $status = $client->body_status($body_id);
   my @message;
   for (qw(food ore water energy)) {
+    push(@message, "$_ (".$status->{"${_}_capacity"}."/".$building->{upgrade}{cost}{$_}.")")
+      if $status->{"${_}_capacity"} < $building->{upgrade}{cost}{$_};
+  }
+  return "Not enough capacity for ".join(", ", @message)." to build this." if @message;
+  for (qw(food ore water energy)) {
     while ($side_effects && $depot && $depot->{work}{seconds_remaining} >= 3600 &&
         $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_} &&
         $status->{"${_}_stored"} < $status->{"${_}_capacity"} - 3600) {
+      emit("Getting 3600 $_ from depot.");
       my $result = eval { $client->depot_transmit($depot->{id}, $_) };
       last unless $result;
       if ($result && $result->{building}) {

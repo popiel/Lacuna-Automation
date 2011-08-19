@@ -8,17 +8,16 @@ use JSON::XS;
 
 my $config_name = "config.json";
 my $body_name;
-my $name = "Trade|Subspace|Mission|Port";
+my $debug;
 
 GetOptions(
   "config=s" => \$config_name,
-  "name=s"   => \$name,
-) or die "$0 --config=foo.json --body=Bar\n";
+  "debug!"   => \$debug,
+) or die "$0 --config=foo.json\n";
 
 my $client = Client->new(config => $config_name);
 my $planets = $client->empire_status->{planets};
 
-my %plans;
 for my $body_id (keys(%$planets)) {
   $body_name = $planets->{$body_id};
   my $buildings = $client->body_buildings($body_id);
@@ -43,6 +42,21 @@ for my $body_id (keys(%$planets)) {
     }
   }
 }
+
+my @trash;
+my $inbox = $client->call(inbox => 'view_inbox');
+emit("inbox result: ".encode_json($inbox));
+for my $message (@{$inbox->{messages}}) {
+  emit("Inspecting message tag @{$message->{tags}}; subject $message->{subject}") if $debug;
+  if (grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair)/) {
+    emit("Trashing $message->{id}") if $debug;
+    push(@trash, $message->{id});
+  }
+}
+my $result = $client->call(inbox => trash_messages => \@trash);
+emit("trash result: ".encode_json($result));
+my $count = @{$result->{success}};
+emit("Trashed $count inbox messages.");
 
 sub emit {
   my $message = shift;
