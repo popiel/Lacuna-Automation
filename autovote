@@ -53,10 +53,12 @@ for my $message (@{$inbox->{messages}}) {
     push(@trash, $message->{id});
   }
 }
-my $result = $client->call(inbox => trash_messages => \@trash);
-emit("trash result: ".encode_json($result)) if $debug;
-my $count = @{$result->{success}};
-emit("Trashed $count inbox messages.");
+if (@trash) {
+  my $result = $client->call(inbox => trash_messages => \@trash);
+  emit("trash result: ".encode_json($result)) if $debug;
+  my $count = @{$result->{success}};
+  emit("Trashed $count inbox messages.");
+}
 
 sub emit {
   my $message = shift;
