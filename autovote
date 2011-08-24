@@ -9,10 +9,12 @@ use JSON::XS;
 my $config_name = "config.json";
 my $body_name;
 my $debug;
+my $glyph;
 
 GetOptions(
   "config=s" => \$config_name,
   "debug!"   => \$debug,
+  "glyph"    => \$glyph,
 ) or die "$0 --config=foo.json\n";
 
 my $client = Client->new(config => $config_name);
@@ -48,7 +50,8 @@ my $inbox = $client->call(inbox => 'view_inbox');
 emit("inbox result: ".encode_json($inbox)) if $debug;
 for my $message (@{$inbox->{messages}}) {
   emit("Inspecting message tag @{$message->{tags}}; subject $message->{subject}") if $debug;
-  if (grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair)/) {
+  if ((grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair)/) ||
+      ($glyph && grep(/Alert/, @{$message->{tags}}) && $message->{subject} eq "Glyph Discovered!")) {
     emit("Trashing $message->{id}") if $debug;
     push(@trash, $message->{id});
   }
