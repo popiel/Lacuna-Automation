@@ -19,7 +19,7 @@ my $equalize = 0;
 my $themepark = 0;
 my $debug = 0;
 my $quiet = 0;
-my $noaction = 0;
+my $noaction = 1;
 
 GetOptions(
   "config=s"    => \$config_name,
@@ -27,7 +27,7 @@ GetOptions(
   "ship|name=s" => \$ship_name,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
-  "noaction"    => \$noaction,
+  "noaction!"    => \$noaction,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my @foods = qw(algae apple bean beetle bread burger
@@ -56,6 +56,8 @@ emit_json("moves", \@moves);
 push_resources(@moves);
 
 sub get_vitals {
+  my $cached = $client->cache_read(type => "misc", id => "trade_vitals_@body_names");
+  return %{$cached->{vitals}} if $cached;
   my %vitals;
   for my $name (@body_names) {
     my $body_id = first { $planets->{$_} =~ /$name/ } keys %$planets;
@@ -67,15 +69,17 @@ sub get_vitals {
     my @ships = sort { $b->{hold_size} <=> $a->{hold_size} }
                 grep { $_->{name} =~ /$ship_name/ }
                 @{$client->call(trade => get_trade_ships => $trade_id)->{ships}};
+    die "No ships available for name $ship_name on planet $planets->{$body_id}\n" unless @ships;
     $vitals{$body_id} = {
       body_id => $body_id,
       trade_id => $trade_id,
       theme_id => $theme_id,
       resources => $resources->{resources},
       capacities => { map { $_, $resources->{status}{body}{"${_}_capacity"} } @categories },
-      ships => \@ships,
+      ship => $ships[0],
     };
   }
+  $client->cache_write(type => "misc", id => "trade_vitals_@body_names", invalid => time() + 600, data => { vitals => \%vitals });
   return %vitals;
 }
 
@@ -194,24 +198,89 @@ sub express_desires {
 }
 
 sub find_best_shipping {
-  my @moves;
-  # Pick an order
+  my %vitals = %{shift()};
+  my %ideals = %{shift()};
+
   # For each resource, find planet with most of it
-    # walk backwards through order, determining shipping quantities based on want and availability
-  # for each leg, detect over capacity for transport
-    # transport resources evenly up to prior levels, adjust cascaded shipping quantities as needed
+  my %max = map { $_, (sort { $vitals{$b}{resources}{$_} <=> $vitals{$a}{resources}{$_} } keys %vitals)[0] } @resources;
+
+  # Pick an order
+  my @order = keys %vitals;
+  my %next = map { $order[$_], $order[($_+1) % @order] } 0..$#order;
+  my %prev = reverse %next;
+
+  # Walk backwards through order, determining shipping quantities based on want and availability
+  my %moves;
+  for my $res (@resources) {
+    for (my $pos = $prev{$max{$res}}; $pos ne $max{$res}; $pos = $prev{$pos}) {
+      $moves{$prev{$pos}}{$res} = max(0, min($vitals{$prev{$pos}}{resources}{$res}, $ideals{$pos}{$res} - $vitals{$pos}{resources}{$res} + $moves{$pos}{$res}));
+    }
+  }
+  emit_json("first pass", \%moves);
+
+  # For each leg, detect over capacity for transport
+  for (;;) {
+    my %totals = map { $_, sum(values(%{$moves{$_}})) } keys %moves;
+    my %deltas = map { $_, $vitals{$_}{ship}{hold_size} - $totals{$_} } keys %totals;
+    my @violations = sort { $deltas{$a} <=> $deltas{$b} } grep { $deltas{$_} < 0 } keys %deltas;
+    last unless @violations;
+
+    my $bad = $violations[0];
+    my %stuff = %{$moves{$bad}};
+    $moves{$bad} = {};
+    my $limit = $vitals{$bad}{ship}{hold_size};
+
+    emit("Over shipping limit on $planets->{$bad}: want to move $totals{$bad}, limit $limit") if $debug;
+
+    # Transport resources evenly up to previously computed levels
+    my @res = sort { $stuff{$a} <=> $stuff{$b} } keys %stuff;
+    while (@res) {
+      $moves{$bad}{$res[0]} = min(int($limit / @res), $stuff{$res[0]});
+      $limit -= $moves{$bad}{$res[0]};
+      shift @res;
+    }
+
+    # Adjust cascaded shipping quantities as needed
+    for my $res (@resources) {
+      for (my $pos = $bad; $pos ne $max{$res}; $pos = $prev{$pos}) {
+        $moves{$prev{$pos}}{$res} = max(0, min($moves{$prev{$pos}}{$res}, $vitals{$prev{$pos}}{resources}{$res}, $ideals{$pos}{$res} - $vitals{$pos}{resources}{$res} + $moves{$pos}{$res}));
+      }
+    }
+    emit_json("after reduction pass", \%moves);
+  }
+
+  my $total_moves = sum(map { sum values %$_ } values %moves);
+  emit("Total $total_moves moved for order ".join(", ", map { $planets->{$_} } @order));
+
+ # Convert to move structure
+  my @moves = map {
+    {
+      source_id => $_,
+      target_id => $next{$_},
+      trade_id  => $vitals{$_}{trade_id},
+      ship      => $vitals{$_}{ship},
+      items     => { %{$moves{$_}} },
+    }
+  } keys %moves;
+
   return @moves;
 }
 
 sub push_resources {
   my @moves = @_;
   for my $move (@moves) {
-    my $result = eval {
-      my $item_text = join(", ", map { "$_->{quantity} $_->{type}" } @{$move->{items}});
-      emit("Sending $item_text to $planets->{$move->{target_id}} on $move->{ships}[0]{name}",
+    my @items = map { { type => $_, quantity => $move->{items}{$_} } } grep { $move->{items}{$_} } keys %{$move->{items}};
+    if (@items) {
+      my $item_text = join(", ", map { "$_->{quantity} $_->{type}" } @items);
+      emit(($noaction ? "Would send" : "Sending")." $item_text to $planets->{$move->{target_id}} on $move->{ship}{name}",
            $planets->{$move->{source_id}});
-      $client->trade_push($move->{trade_id}, $move->{target_id}, $move->{items}, { ship_id => $move->{ships}[0]{id} });
-    };
+      my $result = eval {
+        $client->trade_push($move->{trade_id}, $move->{target_id}, \@items, { ship_id => $move->{ship}{id} }) unless $noaction;
+      };
+    } else {
+      emit("Nothing to send to $planets->{$move->{target_id}} on $move->{ship}{name}",
+           $planets->{$move->{source_id}});
+    }
   }
 }
 
