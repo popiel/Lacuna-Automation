@@ -19,7 +19,7 @@ my $equalize = 0;
 my $themepark = 0;
 my $debug = 0;
 my $quiet = 0;
-my $noaction = 1;
+my $noaction = 0;
 
 GetOptions(
   "config=s"    => \$config_name,
@@ -66,6 +66,7 @@ sub get_vitals {
     my $trade_id = first { $buildings->{$_}{name} eq 'Trade Ministry' } keys %$buildings;
     my $theme_id = first { $buildings->{$_}{name} eq 'Theme Park'     } keys %$buildings;
     my $resources = $client->call(trade => get_stored_resources => $trade_id);
+    my $body = $resources->{status}{body};
     my @ships = sort { $b->{hold_size} <=> $a->{hold_size} }
                 grep { $_->{name} =~ /$ship_name/ }
                 @{$client->call(trade => get_trade_ships => $trade_id)->{ships}};
@@ -75,7 +76,8 @@ sub get_vitals {
       trade_id => $trade_id,
       theme_id => $theme_id,
       resources => $resources->{resources},
-      capacities => { map { $_, $resources->{status}{body}{"${_}_capacity"} } @categories },
+      capacities => { map { $_, max($body->{"${_}_capacity"} - $body->{"${_}_hour"} / 2,
+                                    $body->{"${_}_capacity"} / 2) } @categories },
       ship => $ships[0],
     };
   }
@@ -201,19 +203,62 @@ sub find_best_shipping {
   my %vitals = %{shift()};
   my %ideals = %{shift()};
 
-  # For each resource, find planet with most of it
-  my %max = map { $_, (sort { $vitals{$b}{resources}{$_} <=> $vitals{$a}{resources}{$_} } keys %vitals)[0] } @resources;
+  my @bodies = keys %vitals;
+  my $first = shift @bodies;
 
-  # Pick an order
-  my @order = keys %vitals;
+  my @moves = order_helper(\%vitals, \%ideals, [ $first ], [ @bodies ]);
+  my $amount = sum(map { sum values %{$_->{items}} } @moves);
+  emit("Best total $amount with order ".join(", ", map { $planets->{$_->{source_id}} } @moves));
+  return @moves;
+}
+
+sub order_helper {
+  my $vitals = shift;
+  my $ideals = shift;
+  my $order  = shift;
+  my $remain = shift;
+
+  return shipping_for_order($vitals, $ideals, $order) unless @$remain;
+
+  my $best_amount = 0;
+  my @best_moves = ();
+
+  for my $next (@$remain) {
+    next if grep { $next eq $_ } @$order;
+    my @moves = order_helper($vitals, $ideals, [ @$order, $next ], [ grep { $next ne $_ } @$remain ]);
+    my $amount = sum(map { sum values %{$_->{items}} } @moves);
+
+    if ($best_amount < $amount) {
+      $best_amount = $amount;
+      @best_moves  = @moves;
+    }
+  }
+
+  return @best_moves;
+}
+
+sub shipping_for_order {
+  my %vitals = %{shift()};
+  my %ideals = %{shift()};
+  my @order  = @{shift()};
+
+  # For each resource, find planet with most of it
+  # my %max = map { $_, (sort { $ideals{$b}{$_} - $vitals{$b}{resources}{$_} <=>
+  #                             $ideals{$a}{$_} - $vitals{$a}{resources}{$_} } keys %vitals)[0] } @resources;
+  my %max = map { $_, (sort { $vitals{$b}{resources}{$_} <=>
+                              $vitals{$a}{resources}{$_} } keys %vitals)[0] } @resources;
+
+  # Map the order
   my %next = map { $order[$_], $order[($_+1) % @order] } 0..$#order;
   my %prev = reverse %next;
 
   # Walk backwards through order, determining shipping quantities based on want and availability
   my %moves;
   for my $res (@resources) {
-    for (my $pos = $prev{$max{$res}}; $pos ne $max{$res}; $pos = $prev{$pos}) {
-      $moves{$prev{$pos}}{$res} = max(0, min($vitals{$prev{$pos}}{resources}{$res}, $ideals{$pos}{$res} - $vitals{$pos}{resources}{$res} + $moves{$pos}{$res}));
+    my $pos = $max{$res};
+    $moves{$prev{$pos}}{$res} = max(0, min($vitals{$prev{$pos}}{resources}{$res} - 10, $ideals{$pos}{$res} - $vitals{$pos}{resources}{$res}));
+    for ($pos = $prev{$max{$res}}; $pos ne $max{$res}; $pos = $prev{$pos}) {
+      $moves{$prev{$pos}}{$res} = max(0, min($vitals{$prev{$pos}}{resources}{$res} - 10, $ideals{$pos}{$res} - $vitals{$pos}{resources}{$res} + $moves{$pos}{$res}));
     }
   }
   emit_json("first pass", \%moves);
@@ -230,7 +275,7 @@ sub find_best_shipping {
     $moves{$bad} = {};
     my $limit = $vitals{$bad}{ship}{hold_size};
 
-    emit("Over shipping limit on $planets->{$bad}: want to move $totals{$bad}, limit $limit") if $debug;
+    emit("Over shipping limit on $planets->{$bad}: want to move $totals{$bad}, limit $limit") unless $quiet;
 
     # Transport resources evenly up to previously computed levels
     my @res = sort { $stuff{$a} <=> $stuff{$b} } keys %stuff;
@@ -242,15 +287,15 @@ sub find_best_shipping {
 
     # Adjust cascaded shipping quantities as needed
     for my $res (@resources) {
-      for (my $pos = $bad; $pos ne $max{$res}; $pos = $prev{$pos}) {
-        $moves{$prev{$pos}}{$res} = max(0, min($moves{$prev{$pos}}{$res}, $vitals{$prev{$pos}}{resources}{$res}, $ideals{$pos}{$res} - $vitals{$pos}{resources}{$res} + $moves{$pos}{$res}));
+      for (my $pos = $bad; $pos ne $next{$bad}; $pos = $prev{$pos}) {
+        $moves{$prev{$pos}}{$res} = max(0, min($moves{$prev{$pos}}{$res}, $vitals{$prev{$pos}}{resources}{$res} - 10, $ideals{$pos}{$res} - $vitals{$pos}{resources}{$res} + $moves{$pos}{$res}));
       }
     }
     emit_json("after reduction pass", \%moves);
   }
 
   my $total_moves = sum(map { sum values %$_ } values %moves);
-  emit("Total $total_moves moved for order ".join(", ", map { $planets->{$_} } @order));
+  emit("Total $total_moves moved for order ".join(", ", map { $planets->{$_} } @order)) unless $quiet;
 
  # Convert to move structure
   my @moves = map {
@@ -261,7 +306,7 @@ sub find_best_shipping {
       ship      => $vitals{$_}{ship},
       items     => { %{$moves{$_}} },
     }
-  } keys %moves;
+  } @order;
 
   return @moves;
 }
