@@ -693,6 +693,30 @@ sub map_get_stars {
   return $result;
 }
 
+sub mission_list {
+  my ($self, $where) = @_;
+  my $result = $self->cache_read( type => 'mission_list', id => $where );
+  return $result if $result;
+
+  $result = $self->call(missioncommand => get_missions => $where);
+
+  my $invalid = time() + 600;
+  $self->cache_write( type => 'mission_list', id => $where, data => $result, invalid => $invalid );
+  return $result;
+}
+
+sub mission_complete {
+  my ($self, $where, $mission) = @_;
+  $self->cache_invalidate(type => 'mission_list', id => $where);
+  return $self->call(missioncommand => complete_mission => $where, $id);
+}
+
+sub mission_skip {
+  my ($self, $where, $mission) = @_;
+  $self->cache_invalidate(type => 'mission_list', id => $where);
+  return $self->call(missioncommand => skip_mission => $where, $id);
+}
+
 {
     my %path_for = (
         empire_status                => 'empire/status',
@@ -704,6 +728,7 @@ sub map_get_stars {
         spaceport_view_all_ships     => 'building/%d/view_all_ships',
         observatory_get_probed_stars => 'building/%d/get_probed_stars',
         shipyard_view_build_queue    => 'building/%d/view_build_queue',
+        mission_list                 => 'building/%d/mission_list',
         session                      => 'session',
         misc                         => 'misc/%s',
     );
