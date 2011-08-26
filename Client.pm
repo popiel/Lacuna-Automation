@@ -708,13 +708,13 @@ sub mission_list {
 sub mission_complete {
   my ($self, $where, $mission) = @_;
   $self->cache_invalidate(type => 'mission_list', id => $where);
-  return $self->call(missioncommand => complete_mission => $where, $id);
+  return $self->call(missioncommand => complete_mission => $where, $mission);
 }
 
 sub mission_skip {
   my ($self, $where, $mission) = @_;
   $self->cache_invalidate(type => 'mission_list', id => $where);
-  return $self->call(missioncommand => skip_mission => $where, $id);
+  return $self->call(missioncommand => skip_mission => $where, $mission);
 }
 
 {
