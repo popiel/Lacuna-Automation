@@ -76,8 +76,8 @@ sub get_vitals {
       trade_id => $trade_id,
       theme_id => $theme_id,
       resources => $resources->{resources},
-      capacities => { map { $_, max($body->{"${_}_capacity"} - $body->{"${_}_hour"} / 2,
-                                    $body->{"${_}_capacity"} / 2) } @categories },
+      capacities => { map { $_, int(max($body->{"${_}_capacity"} - $body->{"${_}_hour"} / 2,
+                                        $body->{"${_}_capacity"} / 2)) } @categories },
       ship => $ships[0],
     };
   }
@@ -119,6 +119,7 @@ sub express_desires {
       shift @ids;
     } 
     emit("$res: ".join(", ", map { "$planets->{$_} $ideals{$_}{$res}" } keys %vitals)) if $debug;
+    emit("$res: Original total $totals{$res}, distributed total ".sum(map { $ideals{$_}{$res} } keys %vitals)) if $debug;
   }
 
   # Split ores as evenly as possible, except where that overfills capacity.
@@ -314,7 +315,7 @@ sub shipping_for_order {
 sub push_resources {
   my @moves = @_;
   for my $move (@moves) {
-    my @items = map { { type => $_, quantity => $move->{items}{$_} } } grep { $move->{items}{$_} } keys %{$move->{items}};
+    my @items = map { { type => $_, quantity => int($move->{items}{$_}) } } grep { $move->{items}{$_} } keys %{$move->{items}};
     if (@items) {
       my $item_text = join(", ", map { "$_->{quantity} $_->{type}" } @items);
       emit(($noaction ? "Would send" : "Sending")." $item_text to $planets->{$move->{target_id}} on $move->{ship}{name}",
