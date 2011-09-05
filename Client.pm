@@ -12,6 +12,7 @@ use JSON::XS;
 use LWP::UserAgent;
 use Scalar::Util qw(blessed);
 use Time::Local;
+use List::Util qw(min max first);
 
 sub new {
   my $base = shift;
@@ -116,7 +117,7 @@ sub log_call {
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
   my $file;
-  open($file, ">", "$dir/$filename") or croak "Could not log call: $!";
+  open($file, ">:utf8", "$dir/$filename") or croak "Could not log call: $!";
   print $file encode_json({
     api => $api,
     message => $message,
@@ -706,9 +707,17 @@ sub mission_list {
 }
 
 sub mission_complete {
-  my ($self, $where, $mission) = @_;
+  my ($self, $where, $which) = @_;
   $self->cache_invalidate(type => 'mission_list', id => $where);
-  return $self->call(missioncommand => complete_mission => $where, $mission);
+  my $mission = first { $_->{id} eq $which } @{$self->mission_list($where)->{missions}};
+  my $result = $self->call(missioncommand => complete_mission => $where, $which);
+  if (grep { /speed.*stealth.*hold size.*combat/ } (@{$mission->{rewards}}, @{$mission->{objectives}})) {
+    my $buildings = $self->body_buildings($result->{status}{body}{id});
+    for my $id (keys %{$buildings->{buildings}}) {
+      $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $id );
+    }
+  }
+  return $result;
 }
 
 sub mission_skip {
