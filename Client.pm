@@ -153,7 +153,16 @@ sub call {
     print $response->content;
     die $@;
   }
-  if ($result->{error} && $result->{error}{code} == 1010 && $result->{error}{message} =~ /slow down/i) {
+  if ($result->{error} && $result->{error}{code} == 1010 && $result->{error}{message} =~ /maximum number of requests/i) {
+    # warn "Request: ".encode_json($message)."\n";
+    warn "Error Response: $result->{error}{code}: $result->{error}{message}\n";
+    LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
+                              data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
+    warn "Out of requests.  Shutting down.\n";
+    $self->cache_write( type => 'misc', id => 'rpc_limit', data => [1] );
+    LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
+                              data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
+  } elsif ($result->{error} && $result->{error}{code} == 1010 && $result->{error}{message} =~ /slow down/i) {
     warn "Request throttling active: $result->{error}{message}\nSleeping for 30 seconds before retry.\n";
     sleep 30;
     return $self->call($api, $method, @_);

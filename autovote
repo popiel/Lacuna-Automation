@@ -49,7 +49,7 @@ my @trash;
 my $inbox = $client->call(inbox => 'view_inbox');
 emit("inbox result: ".encode_json($inbox)) if $debug;
 for my $message (@{$inbox->{messages}}) {
-  emit("Inspecting message tag @{$message->{tags}}; subject $message->{subject}") if $debug;
+  emit("Inspecting message tag '@{$message->{tags}}'; subject '$message->{subject}'") if $debug;
   if ((grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair)/) ||
       ($glyph && grep(/Alert/, @{$message->{tags}}) && $message->{subject} eq "Glyph Discovered!")) {
     emit("Trashing $message->{id}") if $debug;
