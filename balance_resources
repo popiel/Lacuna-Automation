@@ -70,6 +70,7 @@ sub get_vitals {
     my @ships = sort { $b->{hold_size} <=> $a->{hold_size} }
                 grep { $_->{name} =~ /$ship_name/ }
                 @{$client->call(trade => get_trade_ships => $trade_id)->{ships}};
+    exit(1) if $quiet && !@ships;
     die "No ships available for name $ship_name on planet $planets->{$body_id}\n" unless @ships;
     $vitals{$body_id} = {
       body_id => $body_id,
