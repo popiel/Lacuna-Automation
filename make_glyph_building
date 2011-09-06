@@ -156,7 +156,7 @@ eval {
           }
           print "Making $plan_plural with ".join(", ", @$recipe).": ".join(", ", @ids)."\n";
           my $result = $client->call(archaeology => assemble_glyphs => $arch_id, [ @ids ]);
-          print "Failed to make $plan_type!\n" if $result->{item_name} ne "Halls of Vrbansk";
+          print "Failed to make $plan_type!\n" if $result->{item_name} ne $plan_type;
         }
       }
 
