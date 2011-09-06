@@ -242,9 +242,11 @@ sub body_status {
   my $self = shift;
   my $body_id = shift;
 
-  my $result =
-          $self->cache_read( type => 'body_status', id => $body_id, stale => 500 ) ||
-          $self->body_buildings($body_id)->{status}{body};
+  my $result = $self->cache_read( type => 'body_status', id => $body_id, stale => 500 );
+  return $result if $result;
+
+  $self->cache_invalidate( type => 'buildings', id => $body_id );
+  $result = $self->body_buildings($body_id)->{status}{body};
   return $result || croak "Couldn't get body status";
 }
 
