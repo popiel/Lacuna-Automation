@@ -97,28 +97,22 @@ for my $resource_type ( sort keys %need ) {
 
     my $need = $need{$resource_type};
     my @quantities = sort { $b <=> $a } keys %available;
-    while ( @quantities ) {
+    while ( $need && @quantities ) {
         my $quantity = shift @quantities;
         my $next_quantity = $quantities[0] || 0;
         my @resources = sort @{ $available{$quantity} };
 
-        # will this set of resources be enough? if so, take proportionally from them
-        if ( @resources * ( $quantity - $next_quantity ) >= $need ) {
-            my $take = int( $need / @resources );
-            my $remainder = $need - @resources * $take;
-            for my $resource ( @resources ) {
-                $send{$resource} += $take + ( --$remainder >= 0 );
-            }
-            last;
+        # take enough of each to bump it down to the next lower occuring quantity
+        # (or less, if that's too much)
+        my $take = @resources * ( $quantity - $next_quantity );
+        if ( $take > $need ) { $take = $need }
+        my $take_per_resource = int( $take / @resources );
+        my $remainder = $take - @resources * $take_per_resource;
+        for my $resource ( @resources ) {
+            $send{$resource} += $take_per_resource + ( --$remainder >= 0 );
+            push @{ $available{$next_quantity} }, $resource;
         }
-        # bump these down to the next lower quantity and continue
-        else {
-            for my $resource ( @resources ) {
-                $send{$resource} += $quantity - $next_quantity;
-                $need -= $quantity - $next_quantity;
-                push @{ $available{$next_quantity} }, $resource;
-            }
-        }
+        $need -= $take;
     }
 }
 
