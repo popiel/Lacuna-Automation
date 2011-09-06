@@ -73,6 +73,7 @@ GetOptions(\%opts,
     # Excavator options
     'db=s',
     'send-excavators|send',
+    'all-yards',
     'rebuild',
     'fill:i',
 
@@ -151,6 +152,7 @@ while (!$finished) {
         get_status();
         do_digs() if $opts{'do-digs'};
         send_excavators() if $opts{'send-excavators'} and $star_db;
+    'all-yards',
         report_status();
         output(pluralize($client->{total_calls}, "api call") . " made.\n");
     };
@@ -567,7 +569,7 @@ sub find_shipyards {
     @yard_ids = sort { $buildings->{$b}->{level} <=> $buildings->{$a}->{level} } @yard_ids;
 
     return if not @yard_ids;
-    return ($yard_ids[0],);
+    return ($yard_ids[0],) unless $opts{"all-yards"};
     return @yard_ids;
 }
 
