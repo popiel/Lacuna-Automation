@@ -78,7 +78,7 @@ for my $supply_pod ( grep $to_buildings->{'buildings'}{$_}{'name'} eq 'Supply Po
 my $to_status = $client->body_status($to_id);
 my %need;
 for my $resource_type ( sort keys %resources ) {
-    $need{$resource_type} = int( $to_status->{ $resource_type . '_capacity' } - $to_status->{ $resource_type . '_stored' } - $to_status->{ $resource_type . '_hour' } * $ship->{'estimated_travel_time'} / 3600 ) - ( $supply_pod_capacity{$resource_type} || 0 );
+    $need{$resource_type} = int( $to_status->{ $resource_type . '_capacity' } - $to_status->{ $resource_type . '_stored' } - $to_status->{ $resource_type . '_hour' } * $ship->{'estimated_travel_time'} / 3600 ) - ( $supply_pod_capacity{$resource_type} || 0 ) - 1;
 #    printf "%s\t%s\t%s/%s\t%s/hr\n", $resource_type, $need{$resource_type}, map $to_status->{$resource_type . "_$_"}, qw/stored capacity hour/;
     delete $need{$resource_type} if $need{$resource_type} <= 0;
 }
