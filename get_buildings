@@ -19,7 +19,7 @@ my $client = Client->new(config => $config_name);
 my $planets = $client->empire_status->{planets};
 
 my %plans;
-for my $body_id (keys(%$planets)) {
+for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys(%$planets)) {
   print "$planets->{$body_id}:\n";
   my $buildings = $client->body_buildings($body_id);
   my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
