@@ -24,5 +24,6 @@ for my $body_id (keys(%$planets)) {
   my $buildings = $client->body_buildings($body_id);
   my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
   my %buildings = map { $_->{name}, $_->{id} } @buildings;
-  printf("  %-22s%d\n", "$_:", $buildings{$_}) for (grep { /$name/ } keys %buildings);
+  my %levels    = map { $_->{name}, $_->{level} } sort { $a->{level} <=> $b->{level} } @buildings;
+  printf("  %-22slevel %2d, id %d\n", "$_:", $levels{$_}, $buildings{$_}) for (sort grep { /$name/ } keys %buildings);
 }
