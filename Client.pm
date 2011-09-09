@@ -154,10 +154,16 @@ sub call {
     die $@;
   }
   if ($result->{error} && $result->{error}{code} == 1010 && $result->{error}{message} =~ /maximum number of requests/i) {
+# {
+#    "error" : {
+#       "code" : 1010,
+#       "data" : null,
+#       "message" : "You have already made the maximum number of requests (10000) you can make for one day."
+#    },
+#    "id" : 1,
+#    "jsonrpc" : "2.0"
+# }
     # warn "Request: ".encode_json($message)."\n";
-    warn "Error Response: $result->{error}{code}: $result->{error}{message}\n";
-    LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
-                              data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
     warn "Out of requests.  Shutting down.\n";
     $self->cache_write( type => 'misc', id => 'rpc_limit', data => [1] );
     LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
