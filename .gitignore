@@ -4,3 +4,5 @@ cron_target_*
 log
 *.queue
 tyleon*
+build.log
+resource.log
