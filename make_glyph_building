@@ -30,7 +30,7 @@ GetOptions(
   "for=s"       => \$for_name,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
-) or die "$0 --config=foo.json --body=Bar\n";
+) or die "$0 --config=foo.json --body=Bar --type=Halls [--count=1] [--for=Baz]\n";
 
 die "Must specify body\n" if $plan_count && !@body_name;
 
@@ -170,7 +170,7 @@ eval {
 
         my $plans = $client->call(trade => get_plans => $trade_id);
         my $psize = $plans->{cargo_space_used_each};
-        my @plans = grep { $_->{name} eq "Halls of Vrbansk" } @{$plans->{plans}};
+        my @plans = grep { $_->{name} eq $plan_type } @{$plans->{plans}};
         $#plans = $plan_count - 1 if @plans > $plan_count;
 
         my @ships = @{$client->call(trade => get_trade_ships => $trade_id, $for_id)->{ships}};

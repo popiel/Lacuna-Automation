@@ -67,6 +67,9 @@ if ($cargo =~ /^\{/) {
   $cargo = decode_json($cargo);
   $items = [ map { { type => $_, quantity => $cargo->{$_} } } keys %$cargo ];
 }
+elsif ($cargo =~ /^\[/) {
+  $items = decode_json($cargo);
+}
 elsif ($cargo eq "all") {
   my %avail;
   my $resources = $client->call(trade => get_stored_resources => $trade->{id});
