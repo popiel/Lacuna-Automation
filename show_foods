@@ -52,8 +52,8 @@ my %stats;
 my %total = reverse %foods;
 $total{$_} = 0 for keys %total;
 for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys(%$planets)) {
-  print "$planets->{$body_id}:\n";
   my $buildings = $client->body_buildings($body_id);
+  print "$planets->{$body_id}: orbit $buildings->{status}{body}{orbit}, net $buildings->{status}{body}{food_hour} food/hr\n";
   my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
   my @producers = grep { $foods{$_->{name}} } @buildings;
   my %produce;
