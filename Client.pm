@@ -76,8 +76,9 @@ sub parse_time {
 
 sub format_time {
   my $time = shift;
+  my $gm = shift;
 
-  my @elems = reverse((localtime($time))[0..5]);
+  my @elems = reverse(($gm ? gmtime($time) : localtime($time))[0..5]);
   $elems[0] += 1900;
   $elems[1]++;
   sprintf("%4d-%02d-%02d %02d:%02d:%02d", @elems);
@@ -98,7 +99,7 @@ sub log_call {
     $count++;
   }
 
-  my $dir = "log/".substr(format_time($time), 0, 10);
+  my $dir = "log/".substr(format_time($time, 1), 0, 10);
   -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
 
   eval { confess("stacktrace") };
@@ -113,7 +114,7 @@ sub log_call {
     $stack =~ s/$pattern/password elided/g;
   }
 
-  my $filename = join(".", format_time($time), sprintf("%03d", $count), $api, $message->{method});
+  my $filename = join(".", format_time($time, 1), $$, sprintf("%03d", $count), $api, $message->{method});
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
   my $file;
@@ -165,7 +166,7 @@ sub call {
 # }
     # warn "Request: ".encode_json($message)."\n";
     warn "Out of requests.  Shutting down.\n";
-    $self->cache_write( type => 'misc', id => 'rpc_limit', data => [1] );
+    $self->cache_write( type => 'misc', id => 'rpc_limit', data => { rpc_exceeded => 1 } );
     LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
                               data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
   } elsif ($result->{error} && $result->{error}{code} == 1010 && $result->{error}{message} =~ /slow down/i) {
