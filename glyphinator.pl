@@ -152,7 +152,6 @@ while (!$finished) {
         get_status();
         do_digs() if $opts{'do-digs'};
         send_excavators() if $opts{'send-excavators'} and $star_db;
-    'all-yards',
         report_status();
         output(pluralize($client->{total_calls}, "api call") . " made.\n");
     };
@@ -1119,6 +1118,7 @@ Options:
                            that will take at least <minutes> (default 360) to
                            complete.  If --continuous is specified, it will use that
                            value if not overridden here before defaulting to 360.
+  --all-yards            - Use all yards on planets, instead of only the best one.
   --max-excavators <n>   - Send at most this number of excavators from any colony.
                            This argument can also be specified as a percentage,
                            eg '25%'
