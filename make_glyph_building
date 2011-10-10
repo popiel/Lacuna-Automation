@@ -85,7 +85,10 @@ eval {
   my $planets = $client->empire_status->{planets};
 
   my $for_id;
-  if ($for_name) {
+  if ($for_name =~ /^(trade|sst)$/i) {
+    # Do nothing.
+  }
+  elsif ($for_name) {
     $for_id = (grep { $planets->{$_} =~ /$for_name/ } keys(%$planets))[0];
     die "No matching planet for name $for_name\n" if $for_name && !$for_id;
     $for_name = $planets->{$for_id};
@@ -160,7 +163,33 @@ eval {
         }
       }
 
-      if ($for_id) {
+      if ($for_name =~ /^sst$/i) {
+        my $trade_id = (grep($_->{name} eq "Subspace Transporter", @buildings))[0]{id};
+        unless ($trade_id) {
+          warn "No Subspace Transporter on $planets->{$body_id}\n";
+          next;
+        }
+        warn "Using Subspace Transporter id $trade_id\n" if $debug;
+
+        my $plans = $client->call(transporter => get_plans => $trade_id);
+        my $psize = $plans->{cargo_space_used_each};
+        my @plans = grep { $_->{name} eq $plan_type } @{$plans->{plans}};
+        $#plans = $plan_count - 1 if @plans > $plan_count;
+
+        my $max = eval { $client->building_view(transporter => $trade_id)->{transport}{max} };
+        unless ($max) {
+          warn "Couldn't get max transport capacity of Subspace Transporter\n";
+          next;
+        }
+
+        while (@plans) {
+          my @items;
+          push(@items, { type => "plan", plan_id => (shift(@plans))->{id} }) while @plans && @items < $max / $psize;
+          print "Putting ".scalar(@items)." $plan_plural on the market for 1e.\n";
+          $client->call(transporter => add_to_market => $trade_id, \@items, 1);
+        }
+      }
+      elsif ($for_name) {
         my $trade_id = (grep($_->{name} eq "Trade Ministry", @buildings))[0]{id};
         unless ($trade_id) {
           warn "No Trade Ministry on $planets->{$body_id}\n";
@@ -197,8 +226,14 @@ eval {
         for my $ship (@ships) {
           my @items;
           push(@items, { type => "plan", plan_id => (shift(@plans))->{id} }) while @plans && @items < $ship->{plan_count};
-          print "Pushing ".scalar(@items)." $plan_plural to $for_name on $ship->{name}.\n";
-          $client->trade_push($trade_id, $for_id, \@items, { ship_id => $ship->{id}, stay => 0 });
+          if ($for_name =~ /^trade$/i) {
+            print "Putting ".scalar(@items)." $plan_plural on the market for 1e with $ship->{name}.\n";
+            $client->call(trade => add_to_market => $trade_id, \@items, 1, { ship_id => $ship->{id} });
+          }
+          else {
+            print "Pushing ".scalar(@items)." $plan_plural to $for_name on $ship->{name}.\n";
+            $client->trade_push($trade_id, $for_id, \@items, { ship_id => $ship->{id}, stay => 0 });
+          }
         }
       }
     }
