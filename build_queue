@@ -60,6 +60,38 @@ open($file, "<", $queue_name) or die "Couldn't read queue file $queue_name: $!\n
 my @queue = (<$file>);
 close $file;
 
+my %foods = (
+  "Planetary Command Center",  "algae",
+  "Malcud Fungus Farm",        "fungus",
+  "Malcud Burger Packer",      "burger",
+  "Algae Cropper",             "algae",
+  "Algae Syrup Bottler",       "syrup",
+  "Amalgus Bean Plantation",   "bean",
+  "Amalgus Bean Soup Cannery", "soup",
+  "Potato Patch",              "potato",
+  "Potato Pancake Factory",    "pancake",
+  "Denton Root Patch",         "root",
+  "Denton Root Chip Frier",    "chip",
+  "Corn Plantation",           "corn",
+  "Corn Meal Grinder",         "meal",
+  "Wheat Farm",                "wheat",
+  "Bread Bakery",              "bread",
+  "Beeldeban Herder",          "beetle",
+  "Beeldeban Protein Shake Factory", "shake",
+  "Apple Orchard",             "apple",
+  "Apple Cider Bottler",       "cider",
+  "Lapis Orchard",             "lapis",
+  "Lapis Pie Bakery",          "pie",
+  "Dairy Farm",                "milk",
+  "Cheese Maker",              "cheese",
+  "Algae Pond",                "algae",
+  "Malcud Field",              "fungus",
+  "Beeldeban Nest",            "beetle",
+  "Lapis Forest",              "lapis",
+  "Denton Brambles",           "root",
+  "Amalgus Meadow",            "bean",
+);
+
 my $buildable;
 my $abort;
 # This needs to be the C-like version of for, because I dink around with $j in some cases
@@ -287,14 +319,16 @@ for (my $j = $[; $j <= $#queue; $j++) {
 
     next if @builds;
 
-    my $focus = "stored";
+    my $focus     = "stored";
     my $max_level = 15;
     my $prod_bias = 24;
+    my $balance   = 0;
     my %ignore;
     for my $arg (@args) {
       $focus     = $1 if $arg =~ /focus (store|hour|prod)/;
       $max_level = $1 if $arg =~ /max level (\d+)/;
       $prod_bias = $1 if $arg =~ /production bias (\d+)/;
+      $balance   = 1  if $arg =~ /balance/;
       if ($arg =~ /ignore (.+)/) {
         my $stuff = $1;
         $ignore{$_} = 1 for split(/\s+/, $stuff);
@@ -380,6 +414,11 @@ for (my $j = $[; $j <= $#queue; $j++) {
 
     @buildings = grep { $_->{name} !~ /Algae Pond|Malcud Field|Lapis Forest|Beeldeban Nest|Geo Thermal Vent|Volcano|Natural Spring/ } @buildings;
     @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
+    my %prod;
+    if ($balance && $type eq "food") {
+      $prod{$foods{$_->{name}}} += $_->{food_hour} for grep { $foods{$_->{name}} } @buildings;
+    }
+    my $max_prod = List::Util::max(values(%prod));
     for my $building (@buildings) {
       $building->{delay} = List::Util::max(0, map { ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) / ($status->{"${_}_hour"} || 0.001) } qw(food ore water energy));
       $building->{delay} *= 100 if grep { $_ eq 'avoid delay' } @args;
@@ -401,8 +440,18 @@ for (my $j = $[; $j <= $#queue; $j++) {
       );
       $building->{payoff_ratio} = $building->{payoff} / List::Util::max(0.1, List::Util::max($building->{cost_time}, $building->{cost_prod}));
     }
+    if ($balance && $type eq "food") {
+      $max_prod += 1 + List::Util::max(map { $_->{payoff} } @buildings);
+      for my $building (@buildings) {
+        $building->{payoff} = $max_prod - $prod{$foods{$building->{name}}} - $building->{payoff};
+        $building->{payoff} = 0 unless $foods{$building->{name}};
+        $building->{payoff_ratio} = $building->{payoff} / List::Util::max(0.1, List::Util::max($building->{cost_time}, $building->{cost_prod}));
+      }
+    }
+
     @buildings = grep { $_->{payoff_ratio} > 0 } @buildings;
-    @buildings = grep { upgrade_check($_) !~ /You can't upgrade.*naturally/ } @buildings;
+    @buildings = grep { $_->{url} !~ /beach/ } @buildings;
+    #@buildings = grep { upgrade_check($_) !~ /You can't upgrade.*naturally/ } @buildings;
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
     if (!($quiet && $sleepy)) {
@@ -423,10 +472,10 @@ for (my $j = $[; $j <= $#queue; $j++) {
     }
     @buildings = @pruned;
     @buildings = grep { $_->{level} < $max_level } @buildings;
-    @buildings = grep { upgrade_check($_) !~ /You can't upgrade.*naturally/ } @buildings;
 
     @buildings = sort { $b->{payoff_ratio} <=> $a->{payoff_ratio} } @buildings;
-    my $building = $buildings[0];
+    # my $building = $buildings[0];
+    my $building = first { upgrade_check($_) !~ /You can't upgrade.*naturally/ } @buildings;
     unless ($building) {
       emit("No upgradable buildings for resource $type!") unless $quiet && $sleepy;
       if ($queue[$j] !~ /^\-/) {
