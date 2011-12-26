@@ -7,7 +7,7 @@ use Client;
 use Date::Manip;
 use Getopt::Long;
 use IO::Handle;
-use JSON::XS;
+use JSON::PP;
 use List::Util qw(max first);
 
 autoflush STDOUT 1;

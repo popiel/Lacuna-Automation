@@ -4,7 +4,7 @@ use strict;
 
 use Client;
 use Getopt::Long;
-use JSON::XS;
+use JSON::PP;
 
 my $config_name = "config.json";
 my $body_name;
