@@ -87,7 +87,7 @@ printf ("Water : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{st
 printf ("Energy: %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "energy"));
 printf ("Waste : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "waste"));
 print "\n";
-print "Buildings:";
+print "Buildings ($body->{building_count} of $body->{size}, with $body->{plots_available} remaining):";
 # print "\nStorage:\n";
 # list_buildings_for_production(\%buildings, [ qw(food_capacity ore_capacity water_capacity energy_capacity) ]);
 # print "\nResources:\n";
