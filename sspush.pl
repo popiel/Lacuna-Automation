@@ -7,7 +7,7 @@ use Carp;
 use Client;
 use Getopt::Long;
 use IO::Handle;
-use JSON::XS;
+use JSON::PP;
 use List::Util;
 
 autoflush STDOUT 1;

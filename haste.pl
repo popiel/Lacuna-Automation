@@ -7,7 +7,7 @@ use feature ':5.10';
 
 use Carp;
 use IO::Handle;
-use JSON::XS;
+use JSON::PP;
 use List::Util qw(sum max min);
 use Data::Dumper;
 use Getopt::Long;

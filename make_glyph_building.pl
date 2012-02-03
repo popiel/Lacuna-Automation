@@ -6,7 +6,7 @@ use Carp;
 use Client;
 use Getopt::Long;
 use IO::Handle;
-use JSON::XS;
+use JSON::PP;
 use List::Util qw(min max sum first);
 
 autoflush STDOUT 1;

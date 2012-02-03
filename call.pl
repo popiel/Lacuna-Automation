@@ -4,7 +4,7 @@ use strict;
 
 use Client;
 use Getopt::Long;
-use JSON::XS;
+use JSON::PP;
 
 my $config_name = "config.json";
 my $body_name;
@@ -16,4 +16,4 @@ GetOptions(
 my $client = Client->new(config => $config_name);
 my @args = map { $_ =~ /\{/ ? decode_json($_) : $_ } @ARGV;
 my $result = $client->call(@args);
-print JSON::XS->new->allow_nonref->canonical->pretty->encode($result);
+print JSON::PP->new->allow_nonref->canonical->pretty->encode($result);

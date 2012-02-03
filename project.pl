@@ -3,7 +3,7 @@
 use strict;
 
 use Getopt::Long;
-use JSON::XS;
+use JSON::PP;
 use List::Util;
 use Time::Local;
 

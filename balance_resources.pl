@@ -6,7 +6,7 @@ use Carp;
 use Client;
 use Getopt::Long;
 use IO::Handle;
-use JSON::XS;
+use JSON::PP;
 use List::Util qw(first min max sum);
 
 autoflush STDOUT 1;
@@ -342,5 +342,5 @@ sub emit_json {
   my $message = shift;
   my $hash = shift;
   print Client::format_time(time())." $message:\n";
-  print JSON::XS->new->allow_nonref->canonical->pretty->encode($hash);
+  print JSON::PP->new->allow_nonref->canonical->pretty->encode($hash);
 }

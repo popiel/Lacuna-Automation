@@ -8,7 +8,7 @@ use Exception::Class (
 );
 use File::Path;
 use File::Spec;
-use JSON::XS;
+use JSON::PP;
 use LWP::UserAgent;
 use Scalar::Util qw(blessed);
 use Time::Local;
@@ -168,7 +168,7 @@ sub call {
     warn "Out of requests.  Shutting down.\n";
     $self->cache_write( type => 'misc', id => 'rpc_limit', data => { rpc_exceeded => 1 } );
     LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
-                              data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
+                              data => JSON::PP->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
   } elsif ($result->{error} && $result->{error}{code} == 1010 && $result->{error}{message} =~ /slow down/i) {
     warn "Request throttling active: $result->{error}{message}\nSleeping for 30 seconds before retry.\n";
     sleep 30;
@@ -177,7 +177,7 @@ sub call {
     # warn "Request: ".encode_json($message)."\n";
     warn "Error Response: $result->{error}{code}: $result->{error}{message}\n";
     LacunaRPCException->throw(code => $result->{error}{code}, text => $result->{error}{message},
-                              data => JSON::XS->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
+                              data => JSON::PP->new->allow_nonref->canonical->pretty->encode($result->{error}{data}));
   }
   croak "Call failed: ".($response->status_line) unless $response->is_success;
   croak "Call response without result" unless $result->{result};

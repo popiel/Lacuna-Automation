@@ -31,6 +31,7 @@ GetOptions(\%opts,
     'no-fetch',
     'no-vacuum',
     'scan-nearby',
+    'scan-sectors=i',
 );
 
 usage() if $opts{h};
@@ -194,38 +195,75 @@ unless ($opts{'no-fetch'}) {
     # reverse hash, to key by name instead of id
     my %planets = map { $empire->{planets}{$_}, $_ } keys %{$empire->{planets}};
 
-    # Scan each planet
-    for my $planet_name (keys %planets) {
-        if (keys %do_planets) {
-            next unless $do_planets{normalize_planet($planet_name)};
+  # Scan each planet
+  my @searchboxes;
+  for my $planet_name ( keys %planets ) {
+    if ( keys %do_planets ) {
+      next unless $do_planets{ normalize_planet($planet_name) };
+    }
+    verbose("Inspecting $planet_name\n");
+
+    # Load planet data
+    my $result    = $client->body_buildings( $planets{$planet_name} );
+    my $buildings = $result->{buildings};
+    my $planet    = $result->{status}->{body};
+    my @stars;
+    my $obs = find_observatory($buildings);
+    if ($obs) {
+      my $probed_stars = $client->get_probed_stars($obs);
+      push( @stars, @{ $probed_stars->{'stars'} } );
+    }
+    if ( $opts{'scan-nearby'} ) {
+      my $sector_size = 30;
+      my $sector_count = $opts{'scan-sectors'} || 1;
+      verbose(   "Getting scan of systems within $sector_count"
+               . " sectors of $planet->{'name'} \n" );
+      my $x_min = $planet->{'x'} - ( $sector_size * ( $sector_count - 1 ) );
+      my $x_max = $planet->{'x'} + ( $sector_size * $sector_count );
+      my $y_min = $planet->{'y'} - ( $sector_size * ( $sector_count - 1 ) );
+      my $y_max = $planet->{'y'} + ( $sector_size * $sector_count );
+      for ( my $x = $x_min ; $x <= $x_max ; $x += $sector_size ) {
+
+        for ( my $y = $y_min ; $y <= $y_max ; $y += $sector_size ) {
+          my $cache_hit = 0;
+
+          #warn "***DEBUG***: Checking 0..$#searchboxes\n";
+        CHECKCACHE: for my $box (@searchboxes) {
+            my ( $box_x_min, $box_x_max, $box_y_min, $box_y_max ) = @$box;
+
+            #warn "***DEBUG*** Checking to see if [$x,$y] is inside"
+            #  . " [$box_x_min,$box_y_min],[$box_x_max,$box_y_max]\n";
+            if (     $box_x_min < $x
+                 and $x < $box_x_max
+                 and $box_y_min < $y
+                 and $y < $box_y_max )
+            {
+              $cache_hit++;
+
+              #warn "***DEBUG*** Cache Hit!\n";
+              last CHECKCACHE;
+            }
+          }
+
+          #warn "***DEBUG*** End cache check\n";
+          if ($cache_hit) {
+            verbose("Skipping search at $x, $y, it was already done.\n");
+          } else {
+            push(
+                  @stars,
+                  @{
+                    $client->map_get_stars( $x - $sector_size,
+                                            $y - $sector_size,
+                                            $x, $y )->{'stars'}
+                    }
+            );
+          }
         }
+      }
 
-        verbose("Inspecting $planet_name\n");
-
-        # Load planet data
-        my $result    = $client->body_buildings($planets{$planet_name});
-        my $buildings = $result->{buildings};
-        my $planet    = $result->{status}->{body};
-        my @stars;
-
-        my $obs = find_observatory($buildings);
-        if ($obs) {
-            my $probed_stars = $client->get_probed_stars($obs);
-            push(@stars, @{$probed_stars->{'stars'}});
-        }
-
-        if ( $opts{'scan-nearby'} ) {
-            verbose("Getting scan of systems near $planet->{'name'} \n");
-            my $sector_size = 30;
-
-            my ($x, $y) = ($planet->{'x'}, $planet->{'y'});
-            push(@stars, @{ $client->map_get_stars( $x - $sector_size, $y, $x, $y + $sector_size )->{'stars'} });
-            push(@stars, @{ $client->map_get_stars( $x, $y, $x + $sector_size, $y + $sector_size )->{'stars'} });
-            push(@stars, @{ $client->map_get_stars( $x - $sector_size, $y - $sector_size, $x, $y )->{'stars'} });
-            push(@stars, @{ $client->map_get_stars( $x, $y - $sector_size, $x + $sector_size, $y )->{'stars'} });
-
-        }
-
+      #warn "***DEBUG*** Adding to cache: [$x_min,$y_min], [$x_max,$y_max]\n";
+      push @searchboxes, [ $x_min, $x_max, $y_min, $y_max ];
+    }
         my %seen;
         @stars = grep { ! $seen{$_->{'name'}}++ } @stars;
 
@@ -630,6 +668,10 @@ Options:
                            passed multiple times to indicate several planets.
                            If this is not specified, all relevant colonies will
                            be inspected.
+  --scan-nearby          - Scan around your planets and space stations for other
+                           planets to send excavators to.
+  --scan-sectors <num>   - Scan <num> sectors around each planet. Default is 1.
+                           (Each sector is a 30x30 square.)
 END
     exit 1;
 }

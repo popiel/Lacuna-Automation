@@ -2,7 +2,7 @@
 
 use strict;
 
-use JSON::XS;
+use JSON::PP;
 
 my $path = shift(@ARGV);
 my $raw = 0;
@@ -26,5 +26,5 @@ $hash = $hash + 0 if !ref($hash) && $hash eq ($hash + 0);
 if ($raw && !ref($hash)) {
   print $hash;
 } else {
-  print JSON::XS->new->allow_nonref->canonical->pretty->encode($hash);
+  print JSON::PP->new->allow_nonref->canonical->pretty->encode($hash);
 }
