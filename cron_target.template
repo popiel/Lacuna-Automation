@@ -2,9 +2,9 @@
 
 cd /home/popiel/games/lacuna
 for n in Sea State Causes; do
-  ./build_queue --body $n >>build.log 2>&1;
-  ./repairman   --body $n >>build.log 2>&1;
+  ./build_queue.pl --body $n >>build.log 2>&1;
+  ./repairman.pl   --body $n >>build.log 2>&1;
 done
 
-./park_ranger --body Causes >>build.log 2>&1
-./trashman    --body Sea    >>build.log 2>&1
+./park_ranger.pl --body Causes >>build.log 2>&1
+./trashman.pl    --body Sea    >>build.log 2>&1
