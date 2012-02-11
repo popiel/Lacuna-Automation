@@ -23,6 +23,7 @@ sub new {
   bless($self, $class);
   $self->read_config();
   $self->{ua} ||= LWP::UserAgent->new();
+  $self->{cache_root} ||= 'cache';
   $self->{total_calls} = 0;
   return $self;
 }
@@ -62,7 +63,7 @@ sub read_config {
   my $self = shift;
   croak "config not specified for Client" unless $self->{config};
   my $config = $self->read_json($self->{config}, "config");
-  for my $key (qw(empire_name empire_password uri api_key)) {
+  for my $key (qw(empire_name empire_password uri api_key cache_root captcha_program)) {
     $self->{$key} = $config->{$key} if exists($config->{$key});
 #    warn "$key: $self->{$key}\n";
   }
@@ -173,6 +174,14 @@ sub call {
     warn "Request throttling active: $result->{error}{message}\nSleeping for 30 seconds before retry.\n";
     sleep 30;
     return $self->call($api, $method, @_);
+  } elsif ($result->{error} && $result->{error}{code} == 1016 && $self->{captcha_program}) {
+    warn "Captcha needed.\n";
+    $self->present_captcha();
+    return $self->call($api, $method, @_);
+  } elsif ($result->{error} && $result->{error}{code} == 1014 && $self->{captcha_program}) {
+    warn "Captcha answer incorrect.\n";
+    $self->present_captcha($result->{error}{data});
+    return "wrong";
   } elsif ($result->{error}) {
     # warn "Request: ".encode_json($message)."\n";
     warn "Error Response: $result->{error}{code}: $result->{error}{message}\n";
@@ -744,6 +753,84 @@ sub mission_skip {
   return $self->call(missioncommand => skip_mission => $where, $mission);
 }
 
+sub spy_list {
+  my ($self, $where) = @_;
+  my $result = $self->cache_read( type => 'spy_list', id => $where );
+  return $result if $result;
+
+  $result = $self->call(intelligence => view_spies => $where);
+
+  my @completions;
+  for my $spy (@{$result->{spy}}) {
+    next if $spy->{is_available};
+    push(@completions, parse_time($spy->{available_on}));
+  }
+  my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 3600, @completions));
+
+  $self->cache_write( type => 'spy_list', id => $where, data => $result, invalid => $invalid );
+  return $result;
+}
+
+sub spy_train {
+  my ($self, $where, $count) = @_;
+  $self->cache_invalidate(type => 'spy_list', id => $where);
+  return $self->call(intelligence => train_spy => $where, $count);
+}
+
+sub spy_burn {
+  my ($self, $where, $who) = @_;
+  $self->cache_invalidate(type => 'spy_list', id => $where);
+  return $self->call(intelligence => burn_spy => $where, $who);
+}
+
+sub spy_name {
+  my ($self, $where, $who, $what) = @_;
+  $self->cache_invalidate(type => 'spy_list', id => $where);
+  return $self->call(intelligence => name_spy => $where, $who, $what);
+}
+
+sub spy_assign {
+  my ($self, $where, $who, $what) = @_;
+  $self->cache_invalidate(type => 'spy_list', id => $where);
+  return $self->call(intelligence => assign_spy => $where, $who, $what);
+}
+
+sub present_captcha {
+  my ($self, $captcha) = @_;
+  $captcha ||= $self->call(captcha => "fetch");
+  for (;;) {
+    my $c_response = $self->{ua}->get($captcha->{url});
+    my $image = $c_response->content;
+    my $filename = $captcha->{url};
+    $filename =~ s-.*/-captcha/-;
+    -d 'captcha' or mkdir 'captcha';
+    my $file;
+    open($file, ">", $filename) or die "Couldn't write captcha image: $filename: $!\n";
+    print $file $image;
+    close($file);
+    open($file, "-|", "$self->{captcha_program} $filename") or die "Couldn't run captcha presenter: $!\n";
+    my $answer = <$file>;
+    close($file);
+    chomp $answer;
+    $answer =~ s/^ANSWER: //;
+    if (!$answer) {
+      $captcha = $self->call(captcha => "fetch");
+      next;
+    }
+    my $response = eval { $self->call(captcha => solve => $captcha->{guid}, $answer) };
+    if ($response eq "wrong") {
+      open($file, ">", "$filename.wrong") or die "Couldn't write captcha answer: $!\n";
+      print $file "$answer\n";
+      close($file);
+    } else {
+      open($file, ">", "$filename.answer") or die "Couldn't write captcha answer: $!\n";
+      print $file "$answer\n";
+      close($file);
+    }
+    last;
+  }
+}
+
 {
     my %path_for = (
         empire_status                => 'empire/status',
@@ -756,6 +843,7 @@ sub mission_skip {
         observatory_get_probed_stars => 'building/%d/get_probed_stars',
         shipyard_view_build_queue    => 'building/%d/view_build_queue',
         mission_list                 => 'building/%d/mission_list',
+        spy_list                     => 'building/%d/spy_list',
         session                      => 'session',
         misc                         => 'misc/%s',
     );
@@ -766,7 +854,7 @@ sub mission_skip {
         my ($host) = ( $self->{uri} =~ m|^\w+://(\w+)\.lacunaexpanse\.com$|i );
         my $name = $self->{empire_name};
         $name =~ s/\W/_/g;
-        return sprintf "cache/%s_%s/$path_for{ $type }", grep { defined $_ } $name, $host, $id, $level;
+        return sprintf "$self->{cache_root}/%s_%s/$path_for{ $type }", grep { defined $_ } $name, $host, $id, $level;
     }
 }
 
