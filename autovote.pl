@@ -10,11 +10,13 @@ my $config_name = "config.json";
 my $body_name;
 my $debug;
 my $glyph;
+my $spy;
 
 GetOptions(
   "config=s" => \$config_name,
   "debug!"   => \$debug,
   "glyph"    => \$glyph,
+  "spy"      => \$spy,
 ) or die "$0 --config=foo.json\n";
 
 my $client = Client->new(config => $config_name);
@@ -51,7 +53,8 @@ emit("inbox result: ".encode_json($inbox)) if $debug;
 for my $message (@{$inbox->{messages}}) {
   emit("Inspecting message tag '@{$message->{tags}}'; subject '$message->{subject}'") if $debug;
   if ((grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair)/) ||
-      ($glyph && grep(/Alert/, @{$message->{tags}}) && $message->{subject} eq "Glyph Discovered!")) {
+      ($glyph && grep(/Alert/, @{$message->{tags}}) && $message->{subject} eq "Glyph Discovered!") ||
+      ($spy && grep(/Spies|Intelligence/, @{$message->{tags}}) && $message->{subject} =~ /Put Me To Work|Mission Objective Missing|Appropriation Report/)) {
     emit("Trashing $message->{id}") if $debug;
     push(@trash, $message->{id});
   }

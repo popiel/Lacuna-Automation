@@ -799,6 +799,7 @@ sub present_captcha {
   my ($self, $captcha) = @_;
   $captcha ||= $self->call(captcha => "fetch");
   for (;;) {
+    warn("Fetched captcha guid $captcha->{guid}\n");
     my $c_response = $self->{ua}->get($captcha->{url});
     my $image = $c_response->content;
     my $filename = $captcha->{url};
