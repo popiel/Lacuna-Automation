@@ -20,27 +20,27 @@ sleep(900 + rand() * 900) if $sleep;
 my $client = Client->new(config => $config_name);
 my $planets = $client->empire_status->{planets};
 
-my @links;
-for my $id (keys(%$planets)) {
+my %zones;
+for my $id (List::Util::shuffle(keys(%$planets))) {
   my $buildings = $client->body_buildings($id);
-  my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
+  my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_, body_id => $id } } keys(%{$buildings->{buildings}});
   my $ed = (grep($_->{name} eq "Entertainment District", @buildings))[0];
   if ($ed) {
-    my $result = eval { $client->call(entertainment => get_lottery_voting_options => $ed->{id}) };
-    if ($result) {
-      emit("Got ".scalar(@{$result->{options}})." entertainment links", $id);
-      push(@links, map { { body_id => $id, %$_ } } @{$result->{options}});
-    }
+    $zones{$buildings->{status}{body}{zone}} = $ed;
   }
 }
-@links = List::Util::shuffle(@links);
-my %visited;
-for my $link (@links) {
-  next if $visited{$link->{name}};
-  $visited{$link->{name}}++;
-  emit("Visiting $link->{name} at $link->{url}", $link->{body_id});
-  `GET '$link->{url}'`;
-  sleep(10 + rand() * 15);
+
+for my $ed (List::Util::shuffle(values(%zones))) {
+  my $result = eval { $client->call(entertainment => get_lottery_voting_options => $ed->{id}) };
+  if ($result) {
+    emit("Got ".scalar(@{$result->{options}})." entertainment links", $ed->{body_id});
+    my $link = (List::Util::shuffle(@{$result->{options}}))[0];
+    if ($link) {
+      emit("Visiting $link->{name} at $link->{url}", $ed->{body_id});
+      `GET '$link->{url}'`;
+      sleep(10 + rand() * 15);
+    }
+  }
 }
 
 sub emit {
