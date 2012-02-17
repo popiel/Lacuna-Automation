@@ -603,6 +603,26 @@ sub send_ship {
   return $result;
 }
 
+sub send_fleet {
+  my $self = shift;
+  my $ships = shift;
+  my $target = shift;
+
+  my $result = $self->call(spaceport => send_fleet => $ships, $target);
+  return $result;
+}
+
+sub send_spies {
+  my $self = shift;
+  my $from = shift;
+  my $to = shift;
+  my $ship = shift;
+  my $spies = shift;
+
+  my $result = $self->call(spaceport => send_spies => $from, $to, $ship, $spies);
+  return $result;
+}
+
 sub yard_queue {
   my $self = shift;
   my $building_id = shift;
@@ -657,8 +677,9 @@ sub yard_build {
   my $self = shift;
   my $building_id = shift;
   my $type = shift;
+  my $count = shift || 1;
 
-  my $result = $self->call(shipyard => build_ship => $building_id, $type);
+  my $result = $self->call(shipyard => build_ship => $building_id, $type, $count);
   $self->cache_invalidate( type => 'buildable', id => $building_id );
   $self->cache_invalidate( type => 'shipyard_view_build_queue', id => $building_id );
   return $result;
@@ -765,7 +786,7 @@ sub spy_list {
     next if $spy->{is_available};
     push(@completions, parse_time($spy->{available_on}));
   }
-  my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 3600, @completions));
+  my $invalid = List::Util::max(time() + 30, List::Util::min(time() + (20 * 60 * 60), @completions));
 
   $self->cache_write( type => 'spy_list', id => $where, data => $result, invalid => $invalid );
   return $result;
@@ -823,10 +844,12 @@ sub present_captcha {
       open($file, ">", "$filename.wrong") or die "Couldn't write captcha answer: $!\n";
       print $file "$answer\n";
       close($file);
+      warn("Failed captcha guid $captcha->{guid}\n");
     } else {
       open($file, ">", "$filename.answer") or die "Couldn't write captcha answer: $!\n";
       print $file "$answer\n";
       close($file);
+      warn("Solved captcha guid $captcha->{guid}\n");
     }
     last;
   }
