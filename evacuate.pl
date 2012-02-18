@@ -18,14 +18,29 @@ my $ship_name;
 my $stay = 0;
 my $debug = 0;
 my $quiet = 0;
+my $do_plans;
+my $do_glyphs;
+my $do_tyleon;
 
 GetOptions(
   "config=s"    => \$config_name,
   "body=s"      => \@body_name,
   "stay!"       => \$stay,
   "debug"       => \$debug,
+  "glyphs!"     => \$do_glyphs,
+  "plans!"      => \$do_plans,
+  "tyleon!"     => \$do_tyleon,
   "quiet"       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
+
+if (!$do_glyphs && !$do_plans && !$do_tyleon) {
+  $do_glyphs = 1 unless defined $do_glyphs;
+  $do_plans  = 1 unless defined $do_plans;
+  $do_tyleon = 1 unless defined $do_tyleon;
+}
+if (defined($do_plans) && !defined($do_tyleon)) {
+  $do_tyleon = $do_plans;
+}
 
 die "Must specify two bodies\n" unless @body_name == 2;
 $ship_name ||= join(" ", @body_name);
@@ -61,10 +76,26 @@ for my $body_id (@body_id) {
   push(@port,  $port);
 }
 
-my $plans  = $client->call(trade => get_plans  => $trade[0]{id});
-my $glyphs = $client->call(trade => get_glyphs => $trade[0]{id});
+my @plans;
+my @glyphs;
 
-exit(0) unless @{$plans->{plans}} || @{$glyphs->{glyphs}};
+my $plans;
+my $glyphs;
+
+if ($do_plans || $do_tyleon) {
+  $plans  = $client->call(trade => get_plans  => $trade[0]{id});
+  @plans = @{$plans->{plans}};
+  @plans = grep { $_->{name} ne "Halls of Vrbansk" } @plans;
+  @plans = grep { $_->{name} !~ /Tyleon/ } @plans unless $do_tyleon;
+  @plans = grep { $_->{name} =~ /Tyleon/ } @plans unless $do_plans;
+}
+
+if ($do_glyphs) {
+  $glyphs = $client->call(trade => get_glyphs => $trade[0]{id});
+  @glyphs = @{$glyphs->{glyphs}};
+}
+
+exit(0) unless @plans || @glyphs;
 
 my $ships = $client->call(trade => get_trade_ships => $trade[0]{id}, $body_id[1]);
 my @ships = grep($_->{name} !~ /(Alpha|Beta)$/ && $_->{task} eq "Docked" && $_->{hold_size} > 10, @{$ships->{ships}});
@@ -74,15 +105,14 @@ for my $ship (@ships) {
   my @items;
   my $pc = 0;
   my $gc = 0;
-  my @plans = grep { $_->{name} ne "Halls of Vrbansk" } @{$plans->{plans}};
   while (@plans && $space > $plans->{cargo_space_used_each}) {
     my $plan = shift @plans;
     push(@items, { type => "plan", plan_id => $plan->{id} });
     $space -= $plans->{cargo_space_used_each};
     $pc++;
   }
-  while (@{$glyphs->{glyphs}} && $space > $glyphs->{cargo_space_used_each}) {
-    my $glyph = shift @{$glyphs->{glyphs}};
+  while (@glyphs && $space > $glyphs->{cargo_space_used_each}) {
+    my $glyph = shift @glyphs;
     push(@items, { type => "glyph", glyph_id => $glyph->{id} });
     $space -= $glyphs->{cargo_space_used_each};
     $gc++;
