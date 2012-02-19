@@ -14,6 +14,13 @@ use Scalar::Util qw(blessed);
 use Time::Local;
 use List::Util qw(min max first);
 
+{
+  package LacunaRPCException;
+  use overload 'bool' => sub { 1 },
+               '""'   => sub { "LacunaRPCException ".($_[0]->code).": ".($_[0]->text)."\n" },
+               '0+'   => sub { $_[0]->code };
+}
+
 sub new {
   my $base = shift;
   die "Cannot make a new Client from ".ref($base)."\n"
