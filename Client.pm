@@ -788,11 +788,7 @@ sub spy_list {
 
   $result = $self->call(intelligence => view_spies => $where);
 
-  my @completions;
-  for my $spy (@{$result->{spy}}) {
-    next if $spy->{is_available};
-    push(@completions, parse_time($spy->{available_on}));
-  }
+  my @completions = map { parse_time($_->{available_on}) } grep { !($_->{is_available}) } @{$result->{spies}};
   my $invalid = List::Util::max(time() + 30, List::Util::min(time() + (20 * 60 * 60), @completions));
 
   $self->cache_write( type => 'spy_list', id => $where, data => $result, invalid => $invalid );
