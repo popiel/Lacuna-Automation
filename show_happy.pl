@@ -21,5 +21,5 @@ for my $id (keys(%$planets)) {
   $happy{$id} = $client->body_status($id)->{happiness};
 }
 for my $id (sort { $happy{$b} <=> $happy{$a} } keys %happy) {
-  printf("%13.0f %s\n", $happy{$id}, $planets->{$id});
+  printf("%13.0f %13.0f/hr %s\n", $happy{$id}, $client->body_status($id)->{happiness_hour}, $planets->{$id});
 }
