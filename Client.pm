@@ -333,6 +333,7 @@ sub body_build {
   for my $x (-5 .. 5) {
     for my $y (-5 .. 5) {
       next if -1 <= $x && $x <= 1 && -1 <= $y && $y <= 1;
+      # next if $x >= 3 && $y >= 3;
       push(@plots, [ $x, $y ]) unless $plots{$x,$y};
     }
   }
@@ -475,6 +476,28 @@ sub building_stats_for_level {
   $result = $self->call($url, get_stats_for_level => $building_id, $level);
   $self->cache_write( type => 'building_stats', id => $building_id, level => $level, data => $result );
   return $result;
+}
+
+sub find_building {
+  my $self  = shift;
+  my $where = shift;
+  my $name  = shift;
+  my $level = shift;
+
+  my $buildings = $self->body_buildings($where);
+  my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
+
+  @buildings = grep { $_->{name}  eq $name  } @buildings;
+  @buildings = grep { $_->{level} == $level } @buildings if $level;
+  my @sorted = sort { $b->{level} <=> $a->{level} } @buildings;
+
+  if (wantarray()) {
+    return @sorted;
+  } else {
+    return $sorted[0] if @sorted;
+    LacunaRPCException->throw(code => 1002, text => "$name not found",
+                              data => JSON::PP->new->allow_nonref->canonical->pretty->encode({body_id => $where, name => $name, level => $level}));
+  }
 }
 
 sub park_party {
@@ -627,6 +650,17 @@ sub send_spies {
   my $spies = shift;
 
   my $result = $self->call(spaceport => send_spies => $from, $to, $ship, $spies);
+  return $result;
+}
+
+sub fetch_spies {
+  my $self = shift;
+  my $from = shift;
+  my $to = shift;
+  my $ship = shift;
+  my $spies = shift;
+
+  my $result = $self->call(spaceport => fetch_spies => $from, $to, $ship, $spies);
   return $result;
 }
 
@@ -786,7 +820,16 @@ sub spy_list {
   my $result = $self->cache_read( type => 'spy_list', id => $where );
   return $result if $result;
 
-  $result = $self->call(intelligence => view_spies => $where);
+  my $intel = $self->find_building($where, "Intelligence Ministry");
+
+  my @spies;
+  my $result;
+  for my $page (1..30) {
+    $result = $self->call(intelligence => view_spies => $intel->{id}, $page);
+    push(@spies, @{$result->{spies}});
+    $result->{spies} = \@spies;
+    last if $result->{spy_count} <= $page * 25;
+  }
 
   my @completions = map { parse_time($_->{available_on}) } grep { !($_->{is_available}) } @{$result->{spies}};
   my $invalid = List::Util::max(time() + 30, List::Util::min(time() + (20 * 60 * 60), @completions));
@@ -797,26 +840,30 @@ sub spy_list {
 
 sub spy_train {
   my ($self, $where, $count) = @_;
-  $self->cache_invalidate(type => 'spy_list', id => $where);
-  return $self->call(intelligence => train_spy => $where, $count);
+  my $result = $self->call(intelligence => train_spy => $where, $count);
+  $self->cache_invalidate(type => 'spy_list', id => $result->{status}{body}{id});
+  return $result;
 }
 
 sub spy_burn {
   my ($self, $where, $who) = @_;
-  $self->cache_invalidate(type => 'spy_list', id => $where);
-  return $self->call(intelligence => burn_spy => $where, $who);
+  my $result = $self->call(intelligence => burn_spy => $where, $who);
+  $self->cache_invalidate(type => 'spy_list', id => $result->{status}{body}{id});
+  return $result;
 }
 
 sub spy_name {
   my ($self, $where, $who, $what) = @_;
-  $self->cache_invalidate(type => 'spy_list', id => $where);
-  return $self->call(intelligence => name_spy => $where, $who, $what);
+  my $result = $self->call(intelligence => name_spy => $where, $who, $what);
+  $self->cache_invalidate(type => 'spy_list', id => $result->{status}{body}{id});
+  return $result;
 }
 
 sub spy_assign {
   my ($self, $where, $who, $what) = @_;
-  $self->cache_invalidate(type => 'spy_list', id => $where);
-  return $self->call(intelligence => assign_spy => $where, $who, $what);
+  my $result = $self->call(intelligence => assign_spy => $where, $who, $what);
+  $self->cache_invalidate(type => 'spy_list', id => $result->{status}{body}{id});
+  return $result;
 }
 
 sub present_captcha {
@@ -864,13 +911,13 @@ sub present_captcha {
         body_status                  => 'body/%d/status',
         buildings                    => 'body/%d/buildings',
         buildable                    => 'body/%d/buildable',
+        spy_list                     => 'body/%d/spy_list',
         building_view                => 'building/%d/view',
         building_stats               => 'building/%d/stats_%d',
         spaceport_view_all_ships     => 'building/%d/view_all_ships',
         observatory_get_probed_stars => 'building/%d/get_probed_stars',
         shipyard_view_build_queue    => 'building/%d/view_build_queue',
         mission_list                 => 'building/%d/mission_list',
-        spy_list                     => 'building/%d/spy_list',
         session                      => 'session',
         misc                         => 'misc/%s',
     );
