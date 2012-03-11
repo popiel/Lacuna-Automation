@@ -165,7 +165,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
 
     $buildable ||= $client->body_buildable($body_id);
     my $reqs = $buildable->{buildable}{$name};
-    unless ($reqs && $reqs->{build}{can}) {
+    unless ($reqs && ($reqs->{build}{can} || $reqs->{build}{reason}[1] =~ /Lost City of Tyleon/)) {
       emit("Cannot build $name: $reqs->{build}{reason}[1]") unless $quiet && $sleepy;
       if (!$quiet) {
         splice(@queue, $j, 1, "-$queue[$j]");
@@ -223,11 +223,11 @@ for (my $j = $[; $j <= $#queue; $j++) {
         splice(@queue, $j, 1);
         if ($rebuild) {
           emit("Requeueing $name at the front of the queue");
-          unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, $level + 1, $name));
+          unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, ($level ? $level + 1 : 0), $name));
         }
         elsif ($requeue) {
           emit("Requeueing $name at the back of the queue");
-          push(@queue, sprintf("+upgrade %s %s\n", $level + 1, $name));
+          push(@queue, sprintf("+upgrade %s %s\n", ($level ? $level + 1 : 0), $name));
         }
         @queue = map { s/^\-//; $_; } @queue;
         write_queue();
