@@ -47,5 +47,5 @@ sub emit {
   my $message = shift;
   my $body_id = shift;
   my $body_name = $planets->{$body_id};
-  print Client::format_time(time())." $body_name: $message\n";
+  print Client::format_time(time())." entertainment: $body_name: $message\n";
 }
