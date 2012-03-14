@@ -20,6 +20,7 @@ my $themepark = 0;
 my $debug = 0;
 my $quiet = 0;
 my $noaction = 0;
+my $do_waste = 1;
 
 GetOptions(
   "config=s"    => \$config_name,
@@ -27,7 +28,8 @@ GetOptions(
   "ship|name=s" => \$ship_name,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
-  "noaction!"    => \$noaction,
+  "noaction!"   => \$noaction,
+  "waste!"      => \$do_waste,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my @foods = qw(algae apple bean beetle bread burger
@@ -103,9 +105,16 @@ sub express_desires {
   }
 
   emit("Distributing waste:") if $debug;
-  # Distribute waste proportionally
-  for my $body_id (keys %vitals) {
-    $ideals{$body_id}{waste} = int($totals{waste} * $vitals{$body_id}{capacities}{waste} / $capacities{waste});
+  if ($do_waste) {
+    # Distribute waste proportionally
+    for my $body_id (keys %vitals) {
+      $ideals{$body_id}{waste} = int($totals{waste} * $vitals{$body_id}{capacities}{waste} / $capacities{waste});
+    }
+  } else {
+    # Leave waste where it is
+    for my $body_id (keys %vitals) {
+      $ideals{$body_id}{waste} = $vitals{$body_id}{resources}{waste};
+    }
   }
   emit("Waste: ".join(", ", map { "$planets->{$_} $ideals{$_}{waste}" } keys %vitals)) if $debug;
 
