@@ -201,9 +201,17 @@ for (my $j = $[; $j <= $#queue; $j++) {
   if ($command =~ /^upgrade (\d+) (.*)/o) {
     my $level = $1;
     my $name = $2;
+    my $realname = $name;
 
     next if @builds;
 
+    if ($name eq "Tyleon") {
+      my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+      @buildings = grep { $_->{name} =~ /Tyleon/ } @buildings;
+      @buildings = sort { ($a->{level} <=> $b->{level}) || ($a->{name} cmp $b->{name}) } @buildings;
+      $name = $buildings[0]{name};
+      $level = $buildings[0]{level} if $level && $buildings[0]{level} < $level;
+    }
     for my $id (keys %{$buildings->{buildings}}) {
       my $building = $buildings->{buildings}{$id};
       print "Matching against $building->{level} $building->{name}\n" if $debug;
@@ -211,7 +219,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
         $building->{id} = $id;
         my $message = upgrade_check($building, 1);
         if ($message) {
-          emit("Cannot upgrade $level $name: $message") unless $quiet && $sleepy;
+          emit("Cannot upgrade $building->{level} $name: $message") unless $quiet && $sleepy;
           if ($queue[$j] !~ /^\-/) {
             splice(@queue, $j, 1, "-$queue[$j]");
             write_queue();
@@ -222,12 +230,12 @@ for (my $j = $[; $j <= $#queue; $j++) {
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
         splice(@queue, $j, 1);
         if ($rebuild) {
-          emit("Requeueing $name at the front of the queue");
-          unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, ($level ? $level + 1 : 0), $name));
+          emit("Requeueing $realname at the front of the queue");
+          unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, ($level ? $level + 1 : 0), $realname));
         }
         elsif ($requeue) {
-          emit("Requeueing $name at the back of the queue");
-          push(@queue, sprintf("+upgrade %s %s\n", ($level ? $level + 1 : 0), $name));
+          emit("Requeueing $realname at the back of the queue");
+          push(@queue, sprintf("+upgrade %s %s\n", ($level ? $level + 1 : 0), $realname));
         }
         @queue = map { s/^\-//; $_; } @queue;
         write_queue();
