@@ -21,6 +21,7 @@ my $quiet = 0;
 my $do_plans;
 my $do_glyphs;
 my $do_tyleon;
+my $do_sculpture;
 
 GetOptions(
   "config=s"    => \$config_name,
@@ -30,16 +31,21 @@ GetOptions(
   "glyphs!"     => \$do_glyphs,
   "plans!"      => \$do_plans,
   "tyleon!"     => \$do_tyleon,
+  "sculpture!"  => \$do_sculpture,
   "quiet"       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 if (!$do_glyphs && !$do_plans && !$do_tyleon) {
-  $do_glyphs = 1 unless defined $do_glyphs;
-  $do_plans  = 1 unless defined $do_plans;
-  $do_tyleon = 1 unless defined $do_tyleon;
+  $do_glyphs    = 1 unless defined $do_glyphs;
+  $do_plans     = 1 unless defined $do_plans;
+  $do_tyleon    = 1 unless defined $do_tyleon;
+  $do_sculpture = 1 unless defined $do_sculpture;
 }
 if (defined($do_plans) && !defined($do_tyleon)) {
   $do_tyleon = $do_plans;
+}
+if (defined($do_plans) && !defined($do_sculpture)) {
+  $do_sculpture = $do_plans;
 }
 
 die "Must specify two bodies\n" unless @body_name == 2;
@@ -82,12 +88,13 @@ my @glyphs;
 my $plans;
 my $glyphs;
 
-if ($do_plans || $do_tyleon) {
+if ($do_plans || $do_tyleon || $do_sculpture) {
   $plans  = $client->call(trade => get_plans  => $trade[0]{id});
   @plans = @{$plans->{plans}};
   @plans = grep { $_->{name} ne "Halls of Vrbansk" } @plans;
   @plans = grep { $_->{name} !~ /Tyleon/ } @plans unless $do_tyleon;
-  @plans = grep { $_->{name} =~ /Tyleon/ } @plans unless $do_plans;
+  @plans = grep { $_->{name} !~ /Sculpture/ } @plans unless $do_sculpture;
+  @plans = grep { $_->{name} =~ /Tyleon|Sculpture/ } @plans unless $do_plans;
 }
 
 if ($do_glyphs) {

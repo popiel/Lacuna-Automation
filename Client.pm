@@ -489,12 +489,12 @@ sub find_building {
 
   @buildings = grep { $_->{name}  eq $name  } @buildings;
   @buildings = grep { $_->{level} == $level } @buildings if $level;
-  my @sorted = sort { $b->{level} <=> $a->{level} } @buildings;
+  my @sorted = sort { $a->{level} <=> $b->{level} } @buildings;
 
   if (wantarray()) {
     return @sorted;
   } else {
-    return $sorted[0] if @sorted;
+    return $sorted[$#sorted] if @sorted;
     LacunaRPCException->throw(code => 1002, text => "$name not found",
                               data => JSON::PP->new->allow_nonref->canonical->pretty->encode({body_id => $where, name => $name, level => $level}));
   }
