@@ -30,8 +30,16 @@ for my $id (List::Util::shuffle(keys(%$planets))) {
   }
 }
 
+my $tries = 3;
 for my $ed (List::Util::shuffle(values(%zones))) {
-  my $result = eval { $client->call(entertainment => get_lottery_voting_options => $ed->{id}) };
+  my $result;
+  do {
+    $result = eval { $client->call(entertainment => get_lottery_voting_options => $ed->{id}) };
+    if ($tries > 0 && $result && !@{$result->{options}}) {
+      emit("No entertainment links, sleeping", $ed->{body_id});
+      sleep(900 + rand() * 900);
+    }
+  } while ($tries-- > 0 && (!$result || !@{$result->{options}}));
   if ($result) {
     emit("Got ".scalar(@{$result->{options}})." entertainment links", $ed->{body_id});
     my $link = (List::Util::shuffle(@{$result->{options}}))[0];
