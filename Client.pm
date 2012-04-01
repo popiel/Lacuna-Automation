@@ -261,6 +261,17 @@ sub empire_status {
   return $result || croak "Couldn't get empire status";
 }
 
+sub match_planet {
+  my $self = shift;
+  my $name = shift;
+  my $planets = $self->empire_status->{planets};
+  my @candidates = grep { $planets->{$_} =~ /$name/ } keys %$planets;
+  return $candidates[0] if @candidates == 1;
+  LacunaRPCException->throw(code => 1002, text => "Planet name $name not found") unless @candidates;
+  LacunaRPCException->throw(code => 1002, text => "Planet name $name is ambiguous",
+                            data => JSON::PP->new->allow_nonref->canonical->pretty->encode([ map { $planets->{$_} } @candidates ]));
+}
+
 sub body_status {
   my $self = shift;
   my $body_id = shift;
