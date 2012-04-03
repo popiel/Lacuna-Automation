@@ -80,6 +80,13 @@ for my $body_id (@body_ids) {
       $ores{$ore} += $excavator->{body}{ore}{$ore};
     }
   }
+  my $port = $client->find_building($body_id, "Space Port");
+  my $ships = $client->port_all_ships($port->{id});
+  my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
+  my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
+  for my $excavator (@travelling) {
+    $star_db->do('update orbitals set excavated_by = ? where body_id = ?', {}, $body_id, $excavator->{to}{id});
+  }
 }
 my @ores = sort keys %ores;
 
