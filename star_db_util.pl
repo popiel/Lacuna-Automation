@@ -14,6 +14,7 @@ use List::Util qw(first);
 use Getopt::Long;
 use Data::Dumper;
 use POSIX qw(strftime);
+use Text::CSV;
 
 use Client;
 
@@ -32,6 +33,7 @@ GetOptions(\%opts,
     'no-vacuum',
     'scan-nearby',
     'scan-sectors=i',
+    'load-stars:s',
 );
 
 usage() if $opts{h};
@@ -82,6 +84,31 @@ if (-f $db_file) {
     }
 }
 $star_db->{AutoCommit} = 0;
+
+if (defined($opts{'load-stars'})) {
+    my $filename = $opts{'load-stars'} || 'stars.csv';
+    unless (-f $filename) {
+      system("wget -O $filename $client->{uri}.s3.amazonaws.com/stars.csv");
+    }
+    my $file;
+    open($file, "<:encoding(utf8)", $filename) or die "Couldn't read $filename: $!\n";
+    my $csv = Text::CSV->new({ binary => 1 }) or die "Cannot use CSV: ".Text::CSV->error_diag()."\n";
+    my $headers = $csv->getline($file);
+    my @missing = grep { my $n = $_; !grep { $n eq $_ } @$headers } qw(id x y name color zone);
+    @missing and die "Columns missing from CSV: @missing\n";
+    $csv->column_names(@$headers);
+    my $star;
+    while ($star = $csv->getline_hr($file)) {
+        if (my $row = star_exists($star->{x}, $star->{y})) {
+            if (($star->{checked_epoch}||0) > ($row->{checked_epoch}||0)) {
+                update_star($star)
+            }
+        } else {
+            insert_star($star);
+        }
+    }
+    close($file);
+}
 
 if ($opts{'merge-db'}) {
     $star_db->{AutoCommit} = 1;
@@ -428,7 +455,7 @@ sub ore_types {
     sub update_orbital {
         my ($body) = @_;
 
-        my @body_fields = qw{ type name x y water size };
+        my @body_fields = qw{ body_id type name x y water size };
         output(sprintf  "Updating %s at %d, %d\n", $body->{'type'}, $body->{'x'}, $body->{'y'});
 
         my $when = $body->{last_checked} || strftime "%Y-%m-%d %T", gmtime;
@@ -526,7 +553,7 @@ CREATE TABLE orbitals (
     y              int,
     type           text,
     subtype        text,
-    last_excavated datetime,
+    excavated_by   int,
     name           text,
 
     water          int,
@@ -562,6 +589,18 @@ SQL
 CREATE TABLE empires (
     id int,
     name text
+)
+SQL
+        <<SQL,
+CREATE TABLE ships (
+    ship_id        int,
+    body_id        int,
+    type           text,
+    destination    int,
+    constructed    datetime,
+    arriving       datetime,
+
+    PRIMARY KEY(ship_id)
 )
 SQL
         <<SQL,
@@ -621,6 +660,12 @@ sub upgrade_star_db {
             'select subtype from orbitals limit 1',
             [
                 'alter table orbitals add subtype text',
+            ],
+        ],
+        [
+            'select excavated_by from orbitals limit 1',
+            [
+                'alter table orbitals add excavated_by int',
             ],
         ],
     );
