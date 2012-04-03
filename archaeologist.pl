@@ -193,8 +193,14 @@ do {
   $change = 0;
   my $min = min(values %ores);
   $debug && emit("Minimum ore value: $min ".join(", ", grep { $ores{$_} == $min } @ores));
+  my %outer;
   for my $j (0..$#how) {
+    next if $outer{$how[$j]{subtype}};
+    $outer{$how[$j]{subtype}} = 1;
+    my %inner;
     for my $k (($j + 1)..$#how) {
+      next if $inner{$how[$k]{subtype}};
+      $inner{$how[$k]{subtype}} = 1;
       my %reduced = map { $_, $ores{$_} - $how[$j]{$_} - $how[$k]{$_} } @ores;
       for my $type1 (@planet_types) {
         for my $type2 (@planet_types) {
