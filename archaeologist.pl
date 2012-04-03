@@ -26,9 +26,12 @@ GetOptions(
   "body=s"    => \@body_names,
   "db=s"      => \$db_file,
   "max_build_time|fill=s" => \$max_build_time,
-  "debug"     => \$debug,
+  "debug+"    => \$debug,
   "quiet"     => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
+
+my $client = Client->new(config => $config_name);
+my $empire_name = $client->empire_status->{name};
 
 $max_build_time = $1         if $max_build_time =~ /^(\d+) ?s(econds?)?$/;
 $max_build_time = $1 * 60    if $max_build_time =~ /^(\d+) ?m(inutes?)?$/;
@@ -48,9 +51,6 @@ eval {
   die "Database is outdated, please specify star_db_util.pl --upgrade to continue\n";
 };
 
-my $client = Client->new(config => $config_name);
-my $empire_name = $client->empire_status->{name};
-
 my $planets = $client->empire_status->{planets};
 
 @body_names = values(%$planets) unless @body_names;
@@ -62,9 +62,9 @@ if ((@body_ids != @body_names)) {
 @body_names = map { $planets->{$_} } @body_ids;
 
 my %arches = map { ($_, $client->find_building($_, "Archaeology Ministry")) } @body_ids;
-emit_json("Archaeology Ministries", \%arches);
+$debug > 1 && emit_json("Archaeology Ministries", \%arches);
 my %excavators = map { ($_, $client->call(archaeology => view_excavators => $arches{$_}{id})) } @body_ids;
-emit_json("Excavators", \%excavators);
+$debug > 1 && emit_json("Excavators", \%excavators);
 
 my $possible = 0;
 my $active = 0;
@@ -163,13 +163,13 @@ do {
     for my $type (@planet_types) {
       my %increased = map { $_, $reduced{$_} + $type->{$_} } @ores;
       my $worst = min(values %increased);
-      $debug && emit("Yield $worst after replacing pos $j with ".type_string($type));
+      $debug > 2 && emit("Yield $worst after replacing pos $j with ".type_string($type));
       if ($min < $worst) {
         $min = $worst;
         %ores = %increased;
         $how[$j] = $type;
         $change = 1;
-        $debug && emit("KEEPER!");
+        $debug && emit("KEEPER! Yield $worst after replacing pos $j with ".type_string($type));
       }
     }
   }
@@ -206,14 +206,14 @@ do {
         for my $type2 (@planet_types) {
           my %increased = map { $_, $reduced{$_} + $type1->{$_} + $type2->{$_} } @ores;
           my $worst = min(values %increased);
-          $debug && emit("Yield $worst after replacing pos $j, $k with ".type_string($type1).", ".type_string($type2));
+          $debug > 2 && emit("Yield $worst after replacing pos $j, $k with ".type_string($type1).", ".type_string($type2));
           if ($min < $worst) {
             $min = $worst;
             %ores = %increased;
             $how[$j] = $type1;
             $how[$k] = $type2;
             $change = 1;
-            $debug && emit("KEEPER!");
+            $debug && emit("KEEPER! Yield $worst after replacing pos $j, $k with ".type_string($type1).", ".type_string($type2));
           }
         }
       }
@@ -236,6 +236,8 @@ emit("Minimum $min, median $median, total $sum");
 
 @how = reverse @how;
 
+$debug && emit("Maximum build time $max_build_time seconds");
+
 for my $body_id (@body_ids) {
   my $possible = $excavators{$body_id}{max_excavators};
   my $active = @{$excavators{$body_id}{excavators}} - 1;
@@ -252,6 +254,7 @@ for my $body_id (@body_ids) {
     $_->{buildable} = $client->yard_buildable($_->{id}) for @yards;
     for my $yard (@yards) {
       $yard->{work}{seconds_remaining} = Client::parse_time($yard->{work}{end}) - time() if $yard->{work}{end};
+      $debug && emit("Shipyard $yard->{id} working for $yard->{work}{seconds_remaining} seconds", $body_id);
     }
     for (1..$delta) {
       my $yard = (sort { ($a->{work}{seconds_remaining} + $a->{buildable}{buildable}{excavator}{cost}{seconds}) <=>
@@ -296,7 +299,7 @@ for my $body_id (@body_ids) {
 }
 
 sub type_string {
-  my %density = (ref($_[0]) ? %$_ : @_);
+  my %density = (ref($_[0]) ? %{$_[0]} : @_);
   return $density{subtype}." ".join(':', map { $density{$_} } @ores);
 }
 
