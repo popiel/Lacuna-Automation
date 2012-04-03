@@ -18,14 +18,16 @@ my $config_name = "config.json";
 my @body_names;
 my $db_file = "stars.db";
 my $max_build_time = 86400;
+my $max_distance = 100;
 my $debug = 0;
 my $quiet = 0;
 
 GetOptions(
   "config=s"  => \$config_name,
-  "body=s"    => \@body_names,
+  "body|b=s"    => \@body_names,
   "db=s"      => \$db_file,
-  "max_build_time|fill=s" => \$max_build_time,
+  "max_build_time|build|fill=s" => \$max_build_time,
+  "max_distance|distance=i" => \$max_distance,
   "debug+"    => \$debug,
   "quiet"     => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
@@ -294,15 +296,25 @@ for my $body_id (@body_ids) {
   for my $ship (@ready) {
     my $target = db_find_body($how[0]{subtype}, $status->{x}, $status->{y});
     if ($target) {
-      db_set_excavated_by($body_id, $target->{body_id});
-      eval {
-        $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
-        emit("Sending excavator to $target->{name} at ($target->{x},$target->{y})", $body_id);
-        1;
-      } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
-      shift(@how);
+      if (($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) +
+          ($target->{y} - $status->{y}) * ($target->{y} - $status->{y}) > $max_distance * $max_distance) {
+        emit("Closest $how[0]{subtype} body $target->{name} at ($target->{x},$target->{y}) is too far away: ".
+             sqrt(($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) + 
+                  ($target->{y} - $status->{y}) * ($target->{y} - $status->{y})),
+             $body_id);
+        last;
+      } else {
+        db_set_excavated_by($body_id, $target->{body_id});
+        eval {
+          $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
+          emit("Sending excavator to $target->{name} at ($target->{x},$target->{y})", $body_id);
+          1;
+        } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
+        shift(@how);
+      }
     } else {
       emit("Cannot find available instance of body subtype $how[0]{subtype}", $body_id);
+      last;
     }
   }
 }
