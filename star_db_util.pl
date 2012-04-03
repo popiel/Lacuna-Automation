@@ -175,10 +175,10 @@ SQL
     while (my $orbital = $get_orbitals->fetchrow_hashref) {
         # Check if it exists in the star db, and if so what its type is
         if (my $row = orbital_exists($orbital->{x}, $orbital->{y})) {
-            if (($orbital->{checked_epoch}||0) > ($row->{checked_epoch}||0)) {
+            if (($orbital->{checked_epoch}||0) >= ($row->{checked_epoch}||0)) {
                 update_orbital( {
                     empire => { id => $orbital->{empire_id} },
-                    (map { $_ => $orbital->{$_} } qw/x y type name water size/),
+                    (map { $_ => $orbital->{$_} } qw/body_id x y type name water size/),
                     ore => { map { $_ => $orbital->{$_} } ore_types() },
                     last_checked => $orbital->{last_checked},
                     image => $orbital->{subtype},
@@ -309,8 +309,10 @@ unless ($opts{'no-fetch'}) {
 
             if ($star->{bodies} and @{$star->{bodies}}) {
                 for my $body (@{$star->{bodies}}) {
+                    $body->{body_id} = $body->{id};
                     if (my $row = orbital_exists($body->{x}, $body->{y})) {
                         if ((($row->{type}||q{}) ne $body->{type})
+                                or (($row->{body_id}||q{}) ne $body->{body_id})
                                 or (($row->{name}||q{}) ne $body->{name})
                                 or ($body->{empire} and ($row->{empire_id}||q{}) ne $body->{empire}{id})
                                 or (defined($body->{size}) and ($row->{size}||q{}) ne $body->{size}) ) {

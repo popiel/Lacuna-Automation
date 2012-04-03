@@ -38,6 +38,7 @@ $max_build_time = $1 * 60    if $max_build_time =~ /^(\d+) ?m(inutes?)?$/;
 $max_build_time = $1 * 3600  if $max_build_time =~ /^(\d+) ?h(ours?)?$/;
 $max_build_time = $1 * 86400 if $max_build_time =~ /^(\d+) ?d(ays?)?$/;
 
+-f $db_file or die "Database does not exist, please specify star_db_util.pl --create to continue\n";
 my $star_db = DBI->connect("dbi:SQLite:$db_file");
 $star_db or die "Can't open star database $db_file: $DBI::errstr\n";
 $star_db->{RaiseError} = 1;
@@ -69,26 +70,32 @@ $debug > 1 && emit_json("Excavators", \%excavators);
 my $possible = 0;
 my $active = 0;
 my %ores;
+my @ores;
 for my $body_id (@body_ids) {
-  $star_db->do('update orbitals set excavated_by = null where excavated_by = ?', {}, $body_id);
+  db_clear_excavated_by($body_id);
   $possible += $excavators{$body_id}{max_excavators};
   $active--;
   for my $excavator (@{$excavators{$body_id}{excavators}}) {
-    $star_db->do('update orbitals set excavated_by = ? where body_id = ?', {}, $body_id, $excavator->{body}{id});
+    db_set_excavated_by($body_id, $excavator->{body}{id});
     $active++;
     for my $ore (keys(%{$excavator->{body}{ore}})) {
       $ores{$ore} += $excavator->{body}{ore}{$ore};
     }
   }
+  @ores = sort keys %ores;
   my $port = $client->find_building($body_id, "Space Port");
   my $ships = $client->port_all_ships($port->{id});
   my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
   my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
   for my $excavator (@travelling) {
-    $star_db->do('update orbitals set excavated_by = ? where body_id = ?', {}, $body_id, $excavator->{to}{id});
+    db_set_excavated_by($body_id, $excavator->{to}{id});
+    $excavator->{body}{ore} = db_lookup_ores($excavator->{to}{id});
+    $active++;
+    for my $ore (keys(%{$excavator->{body}{ore}})) {
+      $ores{$ore} += $excavator->{body}{ore}{$ore};
+    }
   }
 }
-my @ores = sort keys %ores;
 
 emit(join("\n", "Total ore densities:",
           map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
@@ -285,24 +292,60 @@ for my $body_id (@body_ids) {
   my $status = $client->body_status($body_id);
 
   for my $ship (@ready) {
-    my ($target_id, $name, $x, $y) = $star_db->selectrow_array(qq(
-      select body_id, name, x, y from orbitals
-      where subtype = ? and empire_id is null and excavated_by is null
-      order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
-      limit 1
-    ), {}, $how[0]{subtype}, $status->{x}, $status->{x}, $status->{y}, $status->{y});
-    if ($target_id) {
-      $star_db->do(qq(update orbitals set excavated_by = ? where body_id = ?), {}, $body_id, $target_id);
+    my $target = db_find_body($how[0]{subtype}, $status->{x}, $status->{y});
+    if ($target) {
+      db_set_excavated_by($body_id, $target->{body_id});
       eval {
-        $client->send_ship($ship->{id}, { body_id => $target_id });
-        emit("Sending excavator to $name at ($x,$y)", $body_id);
+        $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
+        emit("Sending excavator to $target->{name} at ($target->{x},$target->{y})", $body_id);
         1;
-      } or emit("Couldn't send excavator to $name: $@", $body_id);
+      } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
       shift(@how);
     } else {
       emit("Cannot find available instance of body subtype $how[0]{subtype}", $body_id);
     }
   }
+}
+
+sub db_find_body {
+  my ($subtype, $x, $y) = @_;
+  my $result = $star_db->selectrow_hashref(qq(
+    select body_id, name, x, y from orbitals
+    where subtype = ? and empire_id is null and excavated_by is null
+    order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
+    limit 1
+  ), {}, $subtype, $x, $x, $y, $y);
+  if ($debug > 1) {
+    emit_json("Find body: select body_id, name, x, y from orbitals where subtype = '$subtype' and empire_id is null and excavated_by is null order by (x - $x) * (x - $x) + (y - $y) * (y - $y) limit 1", $result);
+  }
+  return $result;
+}
+
+sub db_lookup_ores {
+  my ($body_id) = @_;
+  my $result = $star_db->selectrow_hashref("select ".join(",", @ores)." from orbitals where body_id = ?", {}, $body_id);
+  if ($debug > 1) {
+    emit_json("Lookup ores: select ".join(",", @ores)." from orbitals where body_id = $body_id", $result);
+  }
+  return $result;
+}
+
+sub db_clear_excavated_by {
+  my ($body_id) = @_;
+  my $result = $star_db->do('update orbitals set excavated_by = null where excavated_by = ?', {}, $body_id);
+  if ($debug > 1) {
+    emit_json("Clear excavated_by: update orbitals set excavated_by = null where excavated_by = $body_id", $result);
+  }
+  return $result;
+}
+
+sub db_set_excavated_by {
+  my ($body_id, $target_id) = @_;
+  my $result = $star_db->do('update orbitals set excavated_by = ? where body_id = ?', {}, $body_id, $target_id);
+  if ($debug > 1) {
+    emit_json("Set excavated_by: update orbitals set excavated_by = $body_id where body_id = $target_id", $result);
+  }
+  return $result;
 }
 
 sub type_string {
