@@ -464,7 +464,7 @@ sub ore_types {
     sub update_orbital {
         my ($body) = @_;
 
-        my @body_fields = qw{ type name x y water size };
+        my @body_fields = qw{ body_id type name x y water size };
         my $station_id = $body->{station} ? $body->{station}{id} : undef;
         output(sprintf  "Updating %s at %d, %d\n", $body->{'type'}, $body->{'x'}, $body->{'y'});
 
@@ -474,7 +474,7 @@ sub ore_types {
             join(", ",
                 q{update orbitals set last_checked = ? },
                 ( map { "$_ = ?" } @body_fields, ore_types() ),
-                'empire_id = ?, subtype = ?, station_id = ?, body_id = ?',
+                'empire_id = ?, subtype = ?, station_id = ?',
             )
             . ' where x = ? and y = ?';
 
@@ -487,7 +487,7 @@ sub ore_types {
         if (defined $body->{'image'}) {
             ($subtype = $body->{'image'}) =~ s/-.*//;
         }
-        push( @update_vars, $body->{'empire'}->{'id'}, $subtype, $station_id, $body->{'id'}, $body->{'x'}, $body->{'y'} );
+        push( @update_vars, $body->{'empire'}->{'id'}, $subtype, $station_id, $body->{'x'}, $body->{'y'} );
         $update_orbital ||= $star_db->prepare($update_statement);
 
         $update_orbital->execute(@update_vars)
