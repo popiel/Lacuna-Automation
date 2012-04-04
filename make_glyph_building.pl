@@ -38,6 +38,7 @@ my %recipes = (
   'Algae Pond'                    => [ [ qw(uraninite methane) ] ],
   'Amalgus Meadow'                => [ [ qw(beryl trona) ] ],
   'Beeldeban Nest'                => [ [ qw(anthracite trona kerogen) ] ],
+  'Black Hole Generator'          => [ [ qw(anthracite beryl kerogen monazite) ] ],
   'Citadel of Knope'              => [ [ qw(beryl sulfur monazite galena) ] ],
   'Crashed Ship Site'             => [ [ qw(monazite trona gold bauxite) ] ],
   'Denton Brambles'               => [ [ qw(rutile goethite) ] ],
