@@ -61,7 +61,7 @@ if (-f $db_file) {
     } else {
         # Check if db is current, if not, suggest upgrade
         my $ok = eval {
-            $star_db->do('select subtype from orbitals limit 1');
+            $star_db->do('select station_id from orbitals limit 1');
             return 1;
         };
         unless ($ok) {
@@ -182,6 +182,7 @@ SQL
                     ore => { map { $_ => $orbital->{$_} } ore_types() },
                     last_checked => $orbital->{last_checked},
                     image => $orbital->{subtype},
+                    station => { id => $orbital->{station_id} },
                 } );
             }
         } else {
@@ -191,6 +192,7 @@ SQL
                 ore => { map { $_ => $orbital->{$_} } ore_types() },
                 last_checked => $orbital->{last_checked},
                 image => $orbital->{subtype},
+                station => { id => $orbital->{station_id} },
             } );
         }
     }
@@ -298,7 +300,8 @@ unless ($opts{'no-fetch'}) {
             if (my $row = star_exists($star->{x}, $star->{y})) {
                 if ((($row->{name}||q{}) ne $star->{name})
                         or (($row->{color}||q{}) ne $star->{color})
-                        or (($row->{zone}||q{}) ne $star->{zone})) {
+                        or (($row->{zone}||q{}) ne $star->{zone})
+                        or ($star->{station} and (($row->{station_id}||q{}) ne $star->{station}{id})) ) {
                     update_star($star)
                 } else {
                     mark_star_checked(@{$row}{qw/x y/});
@@ -315,7 +318,8 @@ unless ($opts{'no-fetch'}) {
                                 or (($row->{body_id}||q{}) ne $body->{body_id})
                                 or (($row->{name}||q{}) ne $body->{name})
                                 or ($body->{empire} and ($row->{empire_id}||q{}) ne $body->{empire}{id})
-                                or (defined($body->{size}) and ($row->{size}||q{}) ne $body->{size}) ) {
+                                or (defined($body->{size}) and ($row->{size}||q{}) ne $body->{size}) 
+                                or ($body->{station} and ($row->{station_id}||q[]) ne $body->{station}{id}) ) {
                             update_orbital($body);
                         } else {
                             mark_orbital_checked(@{$body}{qw/x y/});
@@ -368,12 +372,12 @@ sub ore_types {
     sub insert_star {
         my ($star) = @_;
         my ($id, $name, $x, $y, $color, $zone) = @{$star}{qw/id name x y color zone/};
-
+        my $station_id = $star->{station} ? $star->{station}{id} : undef;
         my $when = $star->{last_checked} || strftime "%Y-%m-%d %T", gmtime;
 
         output("Inserting star $name at $x, $y\n");
-        $insert_star ||= $star_db->prepare('insert into stars (id, name, x, y, color, zone, last_checked) values (?,?,?,?,?,?,?)');
-        $insert_star->execute($id, $name, $x, $y, $color, $zone, $when)
+        $insert_star ||= $star_db->prepare('insert into stars (id, name, x, y, color, zone, last_checked, station_id) values (?,?,?,?,?,?,?,?)');
+        $insert_star->execute($id, $name, $x, $y, $color, $zone, $when, $station_id)
             or die "Can't insert star: " . $insert_star->errstr;
     }
 }
@@ -383,12 +387,13 @@ sub ore_types {
     sub update_star {
         my ($star) = @_;
         my ($x, $y, $name, $color, $zone) = @{$star}{qw/x y name color zone/};
+        my $station_id = $star->{station} ? $star->{station}{id} : undef;
 
         my $when = $star->{last_checked} || strftime "%Y-%m-%d %T", gmtime;
 
         output("Updating star at $x, $y to name $name, color $color, zone $zone\n");
-        $update_star ||= $star_db->prepare(q{update stars set last_checked = ?, name = ?, color = ?, zone = ? where x = ? and y = ?});
-        $update_star->execute($when, $name, $color, $zone, $x, $y);
+        $update_star ||= $star_db->prepare(q{update stars set last_checked = ?, name = ?, color = ?, zone = ?, station_id = ? where x = ? and y = ?});
+        $update_star->execute($when, $name, $color, $zone, $station_id, $x, $y);
     }
 }
 
@@ -419,6 +424,7 @@ sub ore_types {
         my ($body) = @_;
         my @body_fields = qw{ body_id star_id orbit x y type name water size };
         output(sprintf  "Inserting %s at %d, %d\n", $body->{'type'}, $body->{'x'}, $body->{'y'});
+        my $station_id = $body->{station} ? $body->{station}{id} : undef;
 
         my $when = $body->{last_checked} || strftime "%Y-%m-%d %T", gmtime;
 
@@ -426,10 +432,10 @@ sub ore_types {
             q{insert into orbitals (last_checked, }
             . join(", ",
                 @body_fields, ore_types(),
-                'empire_id', 'subtype'
+                'empire_id', 'subtype', 'station_id'
             )
             . ') values (?,'
-            . join(',', map { "?" } @body_fields, ore_types(), 'empire_id', 'subtype')
+            . join(',', map { "?" } @body_fields, ore_types(), 'empire_id', 'subtype', 'station_id')
             . ')';
 
         my $subtype;
@@ -442,6 +448,7 @@ sub ore_types {
             ( map { $body->{'ore'}->{$_} } ore_types() ),
             $body->{'empire'}->{'id'},
             $subtype,
+            $station_id,
         );
 
         $insert_orbital ||= $star_db->prepare($insert_statement);
@@ -457,7 +464,8 @@ sub ore_types {
     sub update_orbital {
         my ($body) = @_;
 
-        my @body_fields = qw{ body_id type name x y water size };
+        my @body_fields = qw{ type name x y water size };
+        my $station_id = $body->{station} ? $body->{station}{id} : undef;
         output(sprintf  "Updating %s at %d, %d\n", $body->{'type'}, $body->{'x'}, $body->{'y'});
 
         my $when = $body->{last_checked} || strftime "%Y-%m-%d %T", gmtime;
@@ -466,7 +474,7 @@ sub ore_types {
             join(", ",
                 q{update orbitals set last_checked = ? },
                 ( map { "$_ = ?" } @body_fields, ore_types() ),
-                'empire_id = ?, subtype = ?'
+                'empire_id = ?, subtype = ?, station_id = ?, body_id = ?',
             )
             . ' where x = ? and y = ?';
 
@@ -479,7 +487,7 @@ sub ore_types {
         if (defined $body->{'image'}) {
             ($subtype = $body->{'image'}) =~ s/-.*//;
         }
-        push( @update_vars, $body->{'empire'}->{'id'}, $subtype, $body->{'x'}, $body->{'y'} );
+        push( @update_vars, $body->{'empire'}->{'id'}, $subtype, $station_id, $body->{'id'}, $body->{'x'}, $body->{'y'} );
         $update_orbital ||= $star_db->prepare($update_statement);
 
         $update_orbital->execute(@update_vars)
@@ -543,7 +551,8 @@ CREATE TABLE stars (
     y            int,
     color        text,
     zone         text,
-    last_checked datetime
+    last_checked datetime,
+    station_id   int
 )
 SQL
         <<SQL,
@@ -583,6 +592,7 @@ CREATE TABLE orbitals (
 
     empire_id      int,
     last_checked   datetime,
+    station_id     int,
     PRIMARY KEY(star_id, orbit),
     FOREIGN KEY(star_id) REFERENCES stars(id)
 )
@@ -668,6 +678,13 @@ sub upgrade_star_db {
             'select excavated_by from orbitals limit 1',
             [
                 'alter table orbitals add excavated_by int',
+            ],
+        ],
+        [
+            'select station_id from orbitals limit 1',
+            [
+                'alter table orbitals add station_id int',
+                'alter table stars add station_id int',
             ],
         ],
     );
