@@ -101,12 +101,8 @@ for my $body_id (@body_ids) {
   }
 }
 
-emit(join("\n", "Total ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
+my @how;
+dump_densities("Total");
 emit("$active excavators active out of $possible excavators possible");
 
 my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ores[$_], $density[$_]) } (0..$#ores); $density{subtype} = $density[$#density]; \%density } qw(
@@ -153,7 +149,6 @@ my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ore
 
 # emit_json("planet_types", \@planet_types);
 
-my @how;
 for (1..($possible - $active)) {
   my $type;
   if ($greedy) {
@@ -166,14 +161,7 @@ for (1..($possible - $active)) {
   $ores{$_} += $type->{$_} for @ores;
 }
 
-emit(join("\n", "First cut ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-emit(join("\n", "Using planet types:",
-          map { type_string($_) } @how));
+$debug && dump_densities("First cut");
 
 my $change;
 do {
@@ -197,18 +185,7 @@ do {
   }
 } while $change;
 
-emit(join("\n", "Second cut ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-emit(join("\n", "Using planet types:",
-          map { type_string($_) } @how));
-my $min = min(values %ores);
-my $median = (sort values %ores)[@ores / 2];
-my $sum = sum(values %ores);
-emit("Minimum $min, median $median, total $sum");
+$debug && dump_densities("Second cut");
 
 my $change;
 do {
@@ -243,18 +220,7 @@ do {
   }
 } while $change;
 
-emit(join("\n", "Third cut ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-emit(join("\n", "Using planet types:",
-          map { type_string($_) } @how));
-my $min = min(values %ores);
-my $median = (sort values %ores)[@ores / 2];
-my $sum = sum(values %ores);
-emit("Minimum $min, median $median, total $sum");
+@how && dump_densities("Third cut");
 
 @how = reverse @how;
 
@@ -313,7 +279,7 @@ for my $body_id (@body_ids) {
         db_set_excavated_by($body_id, $target->{body_id});
         eval {
           $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
-          emit("Sending excavator to $target->{name} at ($target->{x},$target->{y})", $body_id);
+          emit("Sending excavator to $how[0]{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
           1;
         } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
         shift(@how);
@@ -323,6 +289,23 @@ for my $body_id (@body_ids) {
       last;
     }
   }
+}
+
+sub dump_densities {
+  my $label = shift;
+
+  emit(join("\n", "$label ore densities:",
+            map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
+                          $ores{$ores[$_]}, $ores[$_],
+                          $ores{$ores[$_ + 5]}, $ores[$_ + 5],
+                          $ores{$ores[$_ + 10]}, $ores[$_ + 10],
+                          $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
+  emit(join("\n", "Using planet types:",
+            map { type_string($_) } @how)) if @how;
+  my $min = min(values %ores);
+  my $median = (sort { $a <=> $b } values %ores)[@ores / 2];
+  my $sum = sum(values %ores);
+  emit("Minimum $min, median $median, total $sum");
 }
 
 sub db_find_body {
