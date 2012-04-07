@@ -19,15 +19,17 @@ my @body_names;
 my $db_file = "stars.db";
 my $max_build_time = 86400;
 my $max_distance = 100;
+my $greedy = 0;
 my $debug = 0;
 my $quiet = 0;
 
 GetOptions(
   "config=s"  => \$config_name,
-  "body|b=s"    => \@body_names,
+  "body|b=s"  => \@body_names,
   "db=s"      => \$db_file,
   "max_build_time|build|fill=s" => \$max_build_time,
   "max_distance|distance=i" => \$max_distance,
+  "greedy!"   => \$greedy,
   "debug+"    => \$debug,
   "quiet"     => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
@@ -153,9 +155,13 @@ my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ore
 
 my @how;
 for (1..($possible - $active)) {
-  my $worst = (sort { $ores{$a} <=> $ores{$b} } @ores)[0];
-  my $type = (sort { $b->{$worst} <=> $a->{$worst} } @planet_types)[0];
-  $type = $planet_types[$_ % 2];
+  my $type;
+  if ($greedy) {
+    my $worst = (sort { $ores{$a} <=> $ores{$b} } @ores)[0];
+    $type = (sort { $b->{$worst} <=> $a->{$worst} } @planet_types)[0];
+  } else {
+    $type = $planet_types[$_ % 2];
+  }
   push(@how, $type);
   $ores{$_} += $type->{$_} for @ores;
 }
