@@ -22,7 +22,7 @@ my $max_build_time = 86400;
 my $max_distance = 3000;
 my $recheck_distance = 100;
 my $recheck_frequency = 30 * 24 * 60 * 60;
-my $keep_distance = 20;
+my $keep_distance = 15;
 my $debug = 0;
 my $noaction = 0;
 my $quiet = 0;
@@ -102,6 +102,7 @@ for my $body_id (@body_ids) {
     db_update_star($star, $stars->{status}{_time});
     if (!check_keeper($star)) {
       $noaction or $client->call(observatory => abandon_probe => $obs{$body_id}{id}, $star->{id});
+      emit("Abandoning proble at $star->{name} ($star->{x},$star->{y})", $body_id);
       $stars->{star_count}--;
     }
   }
@@ -155,9 +156,16 @@ sub db_update_star {
       $body->{subtype} =~ s/-\d+$//;
       $body->{empire}  ||= {};
       $body->{station} ||= {};
-      my $existing = $star_db->selectrow_arrayref("select body_id, strftime(\"%s\", last_updated) as last_epoch from orbitals where star_id = ? and x = ? and y = ?", {}, $star->{id}, $body->{x}, $body->{y});
+      $body->{empire_id}  = $body->{empire}{id};
+      $body->{station_id} = $body->{station}{id};
+      $debug > 1 && emit("Considering body $body->{name} at ($body->{x},$body->{y})");
+      my $existing = $star_db->selectrow_arrayref("select body_id, strftime(\"%s\", last_checked) as last_epoch from orbitals where star_id = ? and x = ? and y = ?", {}, $star->{id}, $body->{x}, $body->{y});
+      $debug > 1 && emit_json("checked", $existing);
       if ($existing && $existing->[1] < $when) {
-        emit("Updating body $body->{name} at ($body->{x},$body->{y})");
+        my $existing = $star_db->selectrow_hashref("select ".join(",", @ores, @attrs, "empire_id", "station_id")." from orbitals where x = ? and y = ?", {}, $body->{x}, $body->{y});
+        if (grep { $existing->{$_} ne $body->{$_} && $existing->{$_} ne $body->{ore}{$_} } (@ores, @attrs, "empire_id", "station_id")) {
+          emit("Updating body $body->{name} at ($body->{x},$body->{y})");
+        }
         $debug > 2 and emit_json("Updating body $body->{name} at ($body->{x},$body->{y})", $body);
         eval {
           $star_db->do("update orbitals set ".join(", ", map { "$_ = ?" } (@ores, @attrs)).", empire_id = ?, station_id = ?, last_checked = ? where x = ? and y = ? and last_checked < ?", {},
@@ -173,13 +181,16 @@ sub db_update_star {
         } or emit($star_db->err);
       }
     }
-    emit("Updating star $star->{name} at ($star->{x},$star->{y})");
+    my $existing = $star_db->selectrow_hashref("select id, name, color, zone from stars where x = ? and y = ?", {}, $star->{x}, $star->{y});
+    if (grep { $existing->{$_} ne $star->{$_} } qw(id name color zone)) {
+      emit("Updating star $star->{name} at ($star->{x},$star->{y})");
+    }
     eval {
       $star_db->do("update stars set id = ?, name = ?, color = ?, zone = ?, last_checked = ? where x = ? and y = ? and last_checked < ?", {},
                    $star->{id}, $star->{name}, $star->{color}, $star->{zone}, $now, $star->{x}, $star->{y}, $now);
     } or emit($star_db->err);
     1;
-  }
+  } or emit("SQL error: ".$star_db->errstr);
 }
 
 sub check_keeper {
