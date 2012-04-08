@@ -85,6 +85,7 @@ my %yards = map { ($_, [      eval { $client->find_building($_, "Shipyard"   ) }
 @body_ids = grep { $obs{$_} && $ports{$_} && @{$yards{$_}} } @body_ids;
 
 my %ships = map { ($_, $client->port_all_ships($_)) } @body_ids;
+my %stars = map { ($_, $client->get_probed_stars($obs{$_}{id})) } @body_ids;
 
 my %claimed = map  { ($_->{to}{id}, $_) }
               grep { $_->{type} eq "probe" && $_->{task} eq "Travelling" }
@@ -96,7 +97,7 @@ my %claimed = map  { ($_->{to}{id}, $_) }
 # }
 
 for my $body_id (@body_ids) {
-  my $stars = $client->get_probed_stars($obs{$body_id}{id});
+  my $stars = $stars{$body_id};
   $debug > 2 and emit_json("Probes for $body_id", $stars);
   for my $star (@{$stars->{stars}}) {
     db_update_star($star, $stars->{status}{_time});
@@ -106,6 +107,10 @@ for my $body_id (@body_ids) {
       $stars->{star_count}--;
     }
   }
+}
+
+for my $body_id (@body_ids) {
+  my $stars = $stars{$body_id};
   my $wanted = $obs{$body_id}{level} * 3 - $stars->{star_count};
 
   $debug > 1 and emit_json("All ships for $body_id", $ships{$body_id}{ships});
