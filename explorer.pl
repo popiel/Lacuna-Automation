@@ -76,6 +76,7 @@ if ((@body_ids != @body_names)) {
   emit("Aborting due to identification errors", $empire_name);
   exit 1;
 }
+@body_ids = sort { $planets->{$a} cmp $planets->{$b} } @body_ids;
 @body_names = map { $planets->{$_} } @body_ids;
 
 my %obs   = map { ($_, scalar(eval { $client->find_building($_, "Observatory") } )) } @body_ids;
@@ -103,7 +104,7 @@ for my $body_id (@body_ids) {
     db_update_star($star, $stars->{status}{_time});
     if (!check_keeper($star)) {
       $noaction or $client->call(observatory => abandon_probe => $obs{$body_id}{id}, $star->{id});
-      emit("Abandoning proble at $star->{name} ($star->{x},$star->{y})", $body_id);
+      emit("Abandoning probe at $star->{name} ($star->{x},$star->{y})", $body_id);
       $stars->{star_count}--;
     }
   }
@@ -178,7 +179,7 @@ sub db_update_star {
           1;
         } or emit($star_db->errstr);
       } elsif (!$existing) {
-        emit("Inserting body $body->{name} at ($body->{x},$body->{y})");
+        $debug && emit("Inserting body $body->{name} at ($body->{x},$body->{y})");
         eval {
           $star_db->do("insert into orbitals (".join(", ", @ores, @attrs, qw(empire_id station_id last_checked)).") values (".join(", ", map { "?" } (@ores, @attrs), qw(? ? ?)).")", {},
                        (map { $body->{ore}{$_} } @ores), (map { $body->{$_} } @attrs), $body->{empire}{id}, $body->{station}{id}, $now);
