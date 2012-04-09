@@ -1,5 +1,31 @@
 #!/usr/bin/perl
 
+# For simple usage, you don't need to pass any arguments to the script,
+# and run it once per day.  (You should have your empire's connection
+# info in a file named "config.json", with contents similar to the
+# "config.json.template" file.)
+#
+# I personally run the script once per hour, with the arguments
+# "-build=1hour".  This makes it respond a bit quicker to excavators
+# that disappear, and also not block up your shipyards quite as much when
+# replacing excavators.
+#
+# By default, the script will start by balancing p11 and p12 planets,
+# then modifying a little bit from there to cancel out any imbalances you
+# already have from your base planets.  Most of the time, that means it's
+# using almost entirely p11 and p12.  To get it to start with stuff other
+# than p11 and p12, use the "-greedy" argument.
+#
+# If you want to have the script try to balance glyph production for a
+# small group of planets instead of your entire empire, then you can use
+# the "-body=ColonyN" argument (possibly multiple times) to specify which
+# planet(s) you want it to consider.  If you do that, you'll probably
+# want multiple invocations of the script with different planet lists,
+# to cover all your planets.
+#
+# If you've named your star database something other than "stars.db",
+# then you can use the "-db=foo.db" argument to specify a different name.
+
 use strict;
 
 use Carp;
