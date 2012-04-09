@@ -430,6 +430,17 @@ sub building_upgrade {
   }
 }
 
+sub body_subsidize {
+  my $self = shift;
+  my $body_id = shift;
+
+  my $dev = $self->find_building($body_id, "Development Ministry");
+  my $result = $self->call(development => subsidize_build_queue => $dev->{id});
+  $self->cache_invalidate(type => "buildings", id => $body_id);
+  $self->cache_invalidate(type => "buildable", id => $body_id);
+  return $result;
+}
+
 sub halls_sacrifice {
   my $self = shift;
   my $hall_id = shift;
