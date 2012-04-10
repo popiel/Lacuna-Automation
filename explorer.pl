@@ -164,6 +164,7 @@ sub db_update_star {
       $body->{station} ||= {};
       $body->{empire_id}  = $body->{empire}{id};
       $body->{station_id} = $body->{station}{id};
+      db_update_empire($body->{empire}, $when);
       $debug > 1 && emit("Considering body $body->{name} at ($body->{x},$body->{y})");
       my $existing = $star_db->selectrow_arrayref("select body_id, strftime(\"%s\", last_checked) as last_epoch from orbitals where star_id = ? and x = ? and y = ?", {}, $star->{id}, $body->{x}, $body->{y});
       $debug > 1 && emit_json("checked", $existing);
@@ -195,6 +196,39 @@ sub db_update_star {
       $star_db->do("update stars set id = ?, name = ?, color = ?, zone = ?, last_checked = ? where x = ? and y = ? and last_checked < ?", {},
                    $star->{id}, $star->{name}, $star->{color}, $star->{zone}, $now, $star->{x}, $star->{y}, $now);
     } or emit($star_db->err);
+    1;
+  } or emit("SQL error: ".$star_db->errstr);
+}
+
+sub db_update_empire {
+  my $empire = shift;
+  my $when = shift;
+
+  return unless $empire->{id};
+
+  our %empires_seen;
+  return if $empires_seen{$empire->{id}} >= $when;
+  $empires_seen{$empire->{id}} = $when;
+
+  my $now = strftime "%Y-%m-%d %T", gmtime($when);
+
+  eval {
+    $debug > 1 && emit("Considering empire $empire->{name}");
+    my $existing = $star_db->selectrow_arrayref("select id, name from empires where id = ?", {}, $empire->{id});
+    $debug > 1 && emit_json("checked", $existing);
+    if ($existing && $existing->[1] ne $empire->{name}) {
+      $debug > 2 and emit_json("Updating empire $empire->{name})", $empire);
+      eval {
+        $star_db->do("update empires set name = ? where id = ?", {}, $empire->{name}, $empire->{id});
+        1;
+      } or emit($star_db->errstr);
+    } elsif (!$existing) {
+      $debug && emit("Inserting empire $empire->{name}");
+      eval {
+        $star_db->do("insert into empires (name, id) values (?, ?)", {}, $empire->{name}, $empire->{id});
+        1;
+      } or emit($star_db->err);
+    }
     1;
   } or emit("SQL error: ".$star_db->errstr);
 }
