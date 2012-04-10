@@ -107,7 +107,7 @@ sub log_call {
     $count++;
   }
 
-  my $dir = "log/".substr(format_time($time, 1), 0, 10);
+  my $dir = File::Spec->catdir("log", substr(format_time($time, 1), 0, 10));
   -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
 
   eval { confess("stacktrace") };
@@ -126,7 +126,7 @@ sub log_call {
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
   my $file;
-  open($file, ">:utf8", "$dir/$filename") or croak "Could not log call: $!";
+  open($file, ">:utf8", File::Spec->catfile($dir, $filename)) or croak "Could not log call: $!";
   print $file encode_json({
     api => $api,
     message => $message,
@@ -948,7 +948,9 @@ sub present_captcha {
         my ($host) = ( $self->{uri} =~ m|^\w+://(\w+)\.lacunaexpanse\.com$|i );
         my $name = $self->{empire_name};
         $name =~ s/\W/_/g;
-        return sprintf "$self->{cache_root}/%s_%s/$path_for{ $type }", grep { defined $_ } $name, $host, $id, $level;
+        my $result = sprintf "$self->{cache_root}/%s_%s/$path_for{ $type }", grep { defined $_ } $name, $host, $id, $level;
+        $result = File::Spec->catfile(split(/\//, $result));
+        return $result;
     }
 }
 

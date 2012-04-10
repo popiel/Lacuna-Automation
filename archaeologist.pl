@@ -94,6 +94,8 @@ if ((@body_ids != @body_names)) {
 
 my %arches = map { ($_, $client->find_building($_, "Archaeology Ministry")) } @body_ids;
 $debug > 1 && emit_json("Archaeology Ministries", \%arches);
+# Filter down to just those bodies with archaeology ministries
+@body_ids = grep { ref($arches{$_}) } @body_ids;
 my %excavators = map { ($_, $client->call(archaeology => view_excavators => $arches{$_}{id})) } @body_ids;
 $debug > 1 && emit_json("Excavators", \%excavators);
 
