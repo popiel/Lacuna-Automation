@@ -46,6 +46,7 @@ my $db_file = "stars.db";
 my $max_build_time = 86400;
 my $max_distance = 100;
 my $greedy = 0;
+my $avoid_populated = 0;
 my $debug = 0;
 my $quiet = 0;
 
@@ -56,6 +57,7 @@ GetOptions(
   "max_build_time|build|fill=s" => \$max_build_time,
   "max_distance|distance=i" => \$max_distance,
   "greedy!"   => \$greedy,
+  "avoid_populated!" => \$avoid_populated,
   "debug+"    => \$debug,
   "quiet"     => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
@@ -338,14 +340,28 @@ sub dump_densities {
 
 sub db_find_body {
   my ($subtype, $x, $y) = @_;
-  my $result = $star_db->selectrow_hashref(qq(
-    select body_id, name, x, y from orbitals
-    where subtype = ? and empire_id is null and excavated_by is null
-    order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
-    limit 1
-  ), {}, $subtype, $x, $x, $y, $y);
-  if ($debug > 1) {
-    emit_json("Find body: select body_id, name, x, y from orbitals where subtype = '$subtype' and empire_id is null and excavated_by is null order by (x - $x) * (x - $x) + (y - $y) * (y - $y) limit 1", $result);
+  my $result;
+  if ($avoid_populated) {
+    $result = $star_db->selectrow_hashref(qq(
+      select o.body_id, o.name, o.x, o.y from orbitals o
+      left join (
+        select star_id from orbitals
+        where empire_id is not null and empire_id <> ?
+      ) s on (o.star_id = s.star_id)
+      where o.subtype = ? and o.empire_id is null and o.excavated_by is null and s.star_id is null
+      order by (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)
+      limit 1
+    ), {}, $client->empire_status->{id}, $subtype, $x, $x, $y, $y);
+  } else {
+    $result = $star_db->selectrow_hashref(qq(
+      select body_id, name, x, y from orbitals
+      where subtype = ? and empire_id is null and excavated_by is null
+      order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
+      limit 1
+    ), {}, $subtype, $x, $x, $y, $y);
+    if ($debug > 1) {
+      emit_json("Find body: select body_id, name, x, y from orbitals where subtype = '$subtype' and empire_id is null and excavated_by is null order by (x - $x) * (x - $x) + (y - $y) * (y - $y) limit 1", $result);
+    }
   }
   return $result;
 }
