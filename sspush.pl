@@ -18,7 +18,7 @@ autoflush STDOUT 1;
 autoflush STDERR 1;
 
 my %opt;
-GetOptions( \%opt, 'config=s', 'from=s', 'to=s', 'ship=s', 'debug', 'quiet', 'log=s', 'types=s' )
+GetOptions( \%opt, 'config=s', 'from=s', 'to=s', 'ship=s', 'debug', 'quiet', 'log=s', 'types=s', 'send=i' )
     or die "$0 --config=foo.json --from=PlanetBar --to=SpaceStationFoo --ship=shipname\n";
 
 $opt{'config'} ||= 'config.json';
@@ -60,8 +60,9 @@ if ( ! $trade_ministry ) {
 }
 my $have_resources = $client->call('trade', 'get_stored_resources', $trade_ministry)->{'resources'};
 my $ships = $client->call('trade', 'get_trade_ships', $trade_ministry, $to_id);
-my ($ship) = grep $_->{'name'} eq $opt{'ship'}, @{ $ships->{'ships'} };
-if ( ! $ship ) {
+my @ship_list = grep $_->{'name'} eq $opt{'ship'}, @{ $ships->{'ships'} };
+my ($example_ship) = @ship_list;
+if ( ! $example_ship ) {
     exit(1) if $opt{'quiet'};
     die "Ship $opt{'ship'} not available on $from_name\n";
 }
@@ -82,54 +83,62 @@ for my $supply_pod ( grep $to_buildings->{'buildings'}{$_}{'name'} eq 'Supply Po
 my $to_status = $client->body_status($to_id);
 my %need;
 for my $resource_type ( $opt{'types'} ? split /,/, $opt{'types'} : sort keys %resources ) {
-    $need{$resource_type} = int( $to_status->{ $resource_type . '_capacity' } - $to_status->{ $resource_type . '_stored' } - $to_status->{ $resource_type . '_hour' } * $ship->{'estimated_travel_time'} / 3600 ) - ( $supply_pod_capacity{$resource_type} || 0 ) - 1;
+    $need{$resource_type} = int( $to_status->{ $resource_type . '_capacity' } - $to_status->{ $resource_type . '_stored' } - $to_status->{ $resource_type . '_hour' } * $example_ship->{'estimated_travel_time'} / 3600 ) - ( $supply_pod_capacity{$resource_type} || 0 ) - 1;
 #    printf "%s\t%s\t%s/%s\t%s/hr\n", $resource_type, $need{$resource_type}, map $to_status->{$resource_type . "_$_"}, qw/stored capacity hour/;
     delete $need{$resource_type} if $need{$resource_type} <= 0;
 }
 
-my %send;
-for my $resource_type ( sort keys %need ) {
+my $ship_count = ($opt{send} || scalar(@ship_list));
+$need{$_} = int($need{$_} / $ship_count) for (keys %need);
+for my $ship ( @ship_list[0 .. $ship_count - 1] ) {
+    my %send;
+    for my $resource_type ( sort keys %need ) {
+    
+        # for each type, take whatever there is most of, leaving them level
 
-    # for each type, take whatever there is most of, leaving them level
+        my %available;
+        for my $resource ( @{ $resources{$resource_type} } ) {
+            if ( $have_resources->{$resource} ) {
+                push @{ $available{ $have_resources->{$resource} } }, $resource;
+            }
+        }
 
-    my %available;
-    for my $resource ( @{ $resources{$resource_type} } ) {
-        if ( $have_resources->{$resource} ) {
-            push @{ $available{ $have_resources->{$resource} } }, $resource;
+        my $need = $need{$resource_type};
+        my @quantities = sort { $b <=> $a } keys %available;
+        while ( $need && @quantities ) {
+            my $quantity = shift @quantities;
+            my $next_quantity = $quantities[0] || 0;
+            my @resources = sort @{ $available{$quantity} };
+
+            # take enough of each to bump it down to the next lower occuring quantity
+            # (or less, if that's too much)
+            my $take = @resources * ( $quantity - $next_quantity );
+            if ( $take > $need ) { $take = $need }
+            my $take_per_resource = int( $take / @resources );
+            my $remainder = $take - @resources * $take_per_resource;
+            for my $resource ( @resources ) {
+                $send{$resource} += $take_per_resource + ( --$remainder >= 0 );
+                push @{ $available{$next_quantity} }, $resource;
+            }
+            $need -= $take;
         }
     }
 
-    my $need = $need{$resource_type};
-    my @quantities = sort { $b <=> $a } keys %available;
-    while ( $need && @quantities ) {
-        my $quantity = shift @quantities;
-        my $next_quantity = $quantities[0] || 0;
-        my @resources = sort @{ $available{$quantity} };
 
-        # take enough of each to bump it down to the next lower occuring quantity
-        # (or less, if that's too much)
-        my $take = @resources * ( $quantity - $next_quantity );
-        if ( $take > $need ) { $take = $need }
-        my $take_per_resource = int( $take / @resources );
-        my $remainder = $take - @resources * $take_per_resource;
-        for my $resource ( @resources ) {
-            $send{$resource} += $take_per_resource + ( --$remainder >= 0 );
-            push @{ $available{$next_quantity} }, $resource;
+    my @items = map { { type => $_, quantity => $send{$_} } } keys %send;
+    $have_resources->{$_} -= $send{$_} for keys %send;
+
+    my $result;
+    eval {
+        $result = $client->trade_push($trade_ministry, $to_id, \@items, { ship_id => $ship->{'id'} });
+    } or die "error: $@\n";
+
+    if ($result && ! $opt{'quiet'}) {
+        $result = encode_json($result->{ship} || $result);
+        if ($opt{'log'}) {
+            open STDOUT, '>>', $opt{'log'} or die "Couldn't open logfile: $opt{'log'}\n";
         }
-        $need -= $take;
+        print $result, "\n";
     }
 }
 
-my @items = map { { type => $_, quantity => $send{$_} } } keys %send;
-my $result;
-eval {
-    $result = $client->trade_push($trade_ministry, $to_id, \@items, { ship_id => $ship->{'id'} });
-} or die "error: $@\n";
-
-if ($result && ! $opt{'quiet'}) {
-    $result = encode_json($result);
-    if ($opt{'log'}) {
-        open STDOUT, '>>', $opt{'log'} or die "Couldn't open logfile: $opt{'log'}\n";
-    }
-    print $result, "\n";
-}
