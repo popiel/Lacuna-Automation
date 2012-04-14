@@ -107,7 +107,7 @@ sub log_call {
     $count++;
   }
 
-  my $dir = "log/".substr(format_time($time, 1), 0, 10);
+  my $dir = File::Spec->catdir("log", substr(format_time($time, 1), 0, 10));
   -d $dir or mkpath($dir) or croak "Could not make path $dir: $!";
 
   eval { confess("stacktrace") };
@@ -126,7 +126,7 @@ sub log_call {
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
   my $file;
-  open($file, ">:utf8", "$dir/$filename") or croak "Could not log call: $!";
+  open($file, ">:utf8", File::Spec->catfile($dir, $filename)) or croak "Could not log call: $!";
   print $file encode_json({
     api => $api,
     message => $message,
@@ -430,6 +430,17 @@ sub building_upgrade {
   }
 }
 
+sub body_subsidize {
+  my $self = shift;
+  my $body_id = shift;
+
+  my $dev = $self->find_building($body_id, "Development Ministry");
+  my $result = $self->call(development => subsidize_build_queue => $dev->{id});
+  $self->cache_invalidate(type => "buildings", id => $body_id);
+  $self->cache_invalidate(type => "buildable", id => $body_id);
+  return $result;
+}
+
 sub halls_sacrifice {
   my $self = shift;
   my $hall_id = shift;
@@ -585,7 +596,16 @@ sub port_all_ships {
   my $self = shift;
   my $building_id = shift;
 
-  my $result = $self->cache_read( type => 'spaceport_view_all_ships', id => $building_id, stale => 3600 );
+  my $body_id;
+  my $planets = $self->empire_status->{planets};
+  if ($planets->{$building_id}) {
+    $body_id = $building_id;
+    $building_id = $self->find_building($body_id, "Space Port")->{id};
+  } else {
+    $body_id = $self->building_view(spaceport => $building_id)->{status}{body}{id};
+  }
+
+  my $result = $self->cache_read( type => 'spaceport_view_all_ships', id => $body_id, stale => 3600 );
   return $result if $result;
 
   my @ships;
@@ -601,7 +621,7 @@ sub port_all_ships {
     push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
   }
   my $invalid = List::Util::min(time() + 3600, @completions);
-  $self->cache_write( type => 'spaceport_view_all_ships', id => $building_id, data => $result, invalid => $invalid );
+  $self->cache_write( type => 'spaceport_view_all_ships', id => $body_id, data => $result, invalid => $invalid );
   return $result;
 }
 
@@ -621,7 +641,7 @@ sub get_probed_stars {
     $page++;
   }
   $result->{stars} = \@stars;
-  my $invalid = time() + 3600;
+  my $invalid = time() + 600;
   $self->cache_write( type => 'observatory_get_probed_stars', id => $building_id, data => $result, invalid => $invalid );
   return $result;
 }
@@ -747,12 +767,8 @@ sub trade_push {
   my $result = $self->call(trade => push_items => $building_id, $target_id, $items, $options);
   if ($result) {
     $self->cache_invalidate( type => 'body_status', id => $target_id );
-    for my $body ($target_id, $result->{status}{body}{id}) {
-      my $buildings = $self->body_buildings($body);
-      for my $id (keys %{$buildings->{buildings}}) {
-        $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $id );
-      }
-    }
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $target_id );
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
   }
   return $result;
 }
@@ -766,12 +782,8 @@ sub transporter_push {
   my $result = $self->call(transporter => push_items => $building_id, $target_id, $items);
   if ($result) {
     $self->cache_invalidate( type => 'body_status', id => $target_id );
-    for my $body ($target_id, $result->{status}{body}{id}) {
-      my $buildings = $self->body_buildings($body);
-      for my $id (keys %{$buildings->{buildings}}) {
-        $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $id );
-      }
-    }
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $target_id );
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
   }
   return $result;
 }
@@ -812,10 +824,7 @@ sub mission_complete {
   my $mission = first { $_->{id} eq $which } @{$self->mission_list($where)->{missions}};
   my $result = $self->call(missioncommand => complete_mission => $where, $which);
   if (grep { /speed.*stealth.*hold size.*combat/ } (@{$mission->{rewards}}, @{$mission->{objectives}})) {
-    my $buildings = $self->body_buildings($result->{status}{body}{id});
-    for my $id (keys %{$buildings->{buildings}}) {
-      $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $id );
-    }
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
   }
   return $result;
 }
@@ -925,7 +934,7 @@ sub present_captcha {
         spy_list                     => 'body/%d/spy_list',
         building_view                => 'building/%d/view',
         building_stats               => 'building/%d/stats_%d',
-        spaceport_view_all_ships     => 'building/%d/view_all_ships',
+        spaceport_view_all_ships     => 'body/%d/view_all_ships',
         observatory_get_probed_stars => 'building/%d/get_probed_stars',
         shipyard_view_build_queue    => 'building/%d/view_build_queue',
         mission_list                 => 'building/%d/mission_list',
@@ -939,7 +948,9 @@ sub present_captcha {
         my ($host) = ( $self->{uri} =~ m|^\w+://(\w+)\.lacunaexpanse\.com$|i );
         my $name = $self->{empire_name};
         $name =~ s/\W/_/g;
-        return sprintf "$self->{cache_root}/%s_%s/$path_for{ $type }", grep { defined $_ } $name, $host, $id, $level;
+        my $result = sprintf "$self->{cache_root}/%s_%s/$path_for{ $type }", grep { defined $_ } $name, $host, $id, $level;
+        $result = File::Spec->catfile(split(/\//, $result));
+        return $result;
     }
 }
 

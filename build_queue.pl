@@ -245,6 +245,32 @@ for (my $j = $[; $j <= $#queue; $j++) {
       }
     }
   }
+  if ($command =~ /^subsidize (\d+ ?\w*)( limit (\d+))?/o) {
+    my $time = $1;
+    my $amount = $3;
+    $amount ||= 2000;
+
+    $time = $1         if $time =~ /^(\d+) ?s(econds?)?$/;
+    $time = $1 * 60    if $time =~ /^(\d+) ?m(inutes?)?$/;
+    $time = $1 * 3600  if $time =~ /^(\d+) ?h(ours?)?$/;
+    $time = $1 * 86400 if $time =~ /^(\d+) ?d(ays?)?$/;
+
+    next unless @builds;
+    my $ready_in = max(map { eval { Client::parse_time($_->{pending_build}{end}) } || 0 } @builds) - time();
+    next unless $ready_in > $time;
+    next unless $client->empire_status->{essentia} > $amount;
+
+    eval { 
+      my $result = $client->body_subsidize($body_id);
+      my @save;
+      push(@save, int($ready_in / 86400)."d") if $ready_in >= 86400; $ready_in %= 86400;
+      push(@save, int($ready_in /  3600)."h") if $ready_in >=  3600; $ready_in %=  3600;
+      push(@save, int($ready_in /    60)."m") if $ready_in >=    60; $ready_in %=    60;
+      push(@save, int($ready_in /     1)."s") if $ready_in >=     1; $ready_in %=     1;
+      emit("Subsidized build queue for $result->{essentia_spent} essentia, saving ".join(" ", @save));
+      @builds = ();
+    };
+  }
   if ($command =~ /^sacrifice (\d+) (.*)/o) {
     my $level = $1;
     my $name = $2;

@@ -1,5 +1,31 @@
 #!/usr/bin/perl
 
+# For simple usage, you don't need to pass any arguments to the script,
+# and run it once per day.  (You should have your empire's connection
+# info in a file named "config.json", with contents similar to the
+# "config.json.template" file.)
+#
+# I personally run the script once per hour, with the arguments
+# "-build=1hour".  This makes it respond a bit quicker to excavators
+# that disappear, and also not block up your shipyards quite as much when
+# replacing excavators.
+#
+# By default, the script will start by balancing p11 and p12 planets,
+# then modifying a little bit from there to cancel out any imbalances you
+# already have from your base planets.  Most of the time, that means it's
+# using almost entirely p11 and p12.  To get it to start with stuff other
+# than p11 and p12, use the "-greedy" argument.
+#
+# If you want to have the script try to balance glyph production for a
+# small group of planets instead of your entire empire, then you can use
+# the "-body=ColonyN" argument (possibly multiple times) to specify which
+# planet(s) you want it to consider.  If you do that, you'll probably
+# want multiple invocations of the script with different planet lists,
+# to cover all your planets.
+#
+# If you've named your star database something other than "stars.db",
+# then you can use the "-db=foo.db" argument to specify a different name.
+
 use strict;
 
 use Carp;
@@ -20,15 +46,19 @@ my @body_names;
 my $db_file = "stars.db";
 my $max_build_time = 86400;
 my $max_distance = 100;
+my $greedy = 0;
+my $avoid_populated = 0;
 my $debug = 0;
 my $quiet = 0;
 
 GetOptions(
   "config=s"  => \$config_name,
-  "body|b=s"    => \@body_names,
+  "body|b=s"  => \@body_names,
   "db=s"      => \$db_file,
   "max_build_time|build|fill=s" => \$max_build_time,
   "max_distance|distance=i" => \$max_distance,
+  "greedy!"   => \$greedy,
+  "avoid_populated!" => \$avoid_populated,
   "debug+"    => \$debug,
   "quiet"     => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
@@ -70,6 +100,8 @@ my %yards  = map { ($_, ([$client->find_building($_, "Shipyard")]||[{}])->[0]) }
 my @body_ids = grep { ref($arches{$_}) eq 'HASH' && ref($ports{$_}) eq 'HASH' && ref($yards{$_}) eq 'HASH' } @body_ids;
 $debug > 1 && emit_json("Pruned body_ids", \@body_ids);
 $debug > 1 && emit_json("Archaeology Ministries", \%arches);
+# Filter down to just those bodies with archaeology ministries
+@body_ids = grep { ref($arches{$_}) } @body_ids;
 my %excavators = map { ($_, $client->call(archaeology => view_excavators => $arches{$_}{id})) } @body_ids;
 $debug > 1 && emit_json("Excavators", \%excavators);
 
@@ -103,12 +135,8 @@ for my $body_id (@body_ids) {
   }
 }
 
-emit(join("\n", "Total ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
+my @how;
+dump_densities("Total");
 emit("$active excavators active out of $possible excavators possible");
 
 my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ores[$_], $density[$_]) } (0..$#ores); $density{subtype} = $density[$#density]; \%density } qw(
@@ -122,6 +150,7 @@ my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ore
 1:1:1:1:1:1:5790:1:1:1:1:40:1:1:1:1:1:1:1:1:a6
 1:1:1:1:1:3291:1:1:1:1:1:1:1:1:1239:1:1:1:2377:1:a7
 1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:7954:a8
+1:1:1:1:1:1:1:1:1:1:1:1:1:5500:1:1:1:1:1:1:a9
 6250:108:1:1:1:1:1:1:1:1:55:1:1:1:1:1:1:300:1:1:a10
 1:1:1:1:1:1:1:1:1:1:1:1:9980:1:1:1:1:1:1:1:a11
 289:269:313:299:320:307:278:292:310:311:301:284:296:285:319:258:324:293:276:275:a12
@@ -131,6 +160,7 @@ my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ore
 1:1894:1:1:1:1793:1:1:2132:1:1:1:1:1:1:1:1:2018:1:1:a16
 1:1:4233:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:a17
 1:1:1:1:1:1:1:1:1:4120:1:1:1:1:1:1:1:3326:1:1:a18
+1:1:1:3333:1:1:1:1:1:1:1:1:1:1:1:1:2873:1:1:1:a19
 1:1:1:1:1:1:1:6342:1:1:1:1:1:1:1:1:1:1:1:1:a20
 1:1:1:1:1:1:1:1:1:1:1:1:10:1:1:1:1:1:1:1:debris1
 1:250:1:1000:5000:1:1500:500:500:250:250:1:1:1:1:500:1:1:250:1:p1
@@ -155,23 +185,19 @@ my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ore
 
 # emit_json("planet_types", \@planet_types);
 
-my @how;
 for (1..($possible - $active)) {
-  my $worst = (sort { $ores{$a} <=> $ores{$b} } @ores)[0];
-  my $type = (sort { $b->{$worst} <=> $a->{$worst} } @planet_types)[0];
-  $type = $planet_types[$_ % 2];
+  my $type;
+  if ($greedy) {
+    my $worst = (sort { $ores{$a} <=> $ores{$b} } @ores)[0];
+    $type = (sort { $b->{$worst} <=> $a->{$worst} } @planet_types)[0];
+  } else {
+    $type = $planet_types[$_ % 2];
+  }
   push(@how, $type);
   $ores{$_} += $type->{$_} for @ores;
 }
 
-emit(join("\n", "First cut ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-emit(join("\n", "Using planet types:",
-          map { type_string($_) } @how));
+$debug && dump_densities("First cut");
 
 my $change;
 do {
@@ -195,18 +221,7 @@ do {
   }
 } while $change;
 
-emit(join("\n", "Second cut ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-emit(join("\n", "Using planet types:",
-          map { type_string($_) } @how));
-my $min = min(values %ores);
-my $median = (sort values %ores)[@ores / 2];
-my $sum = sum(values %ores);
-emit("Minimum $min, median $median, total $sum");
+$debug && dump_densities("Second cut");
 
 my $change;
 do {
@@ -241,18 +256,7 @@ do {
   }
 } while $change;
 
-emit(join("\n", "Third cut ore densities:",
-          map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
-                        $ores{$ores[$_]}, $ores[$_],
-                        $ores{$ores[$_ + 5]}, $ores[$_ + 5],
-                        $ores{$ores[$_ + 10]}, $ores[$_ + 10],
-                        $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-emit(join("\n", "Using planet types:",
-          map { type_string($_) } @how));
-my $min = min(values %ores);
-my $median = (sort values %ores)[@ores / 2];
-my $sum = sum(values %ores);
-emit("Minimum $min, median $median, total $sum");
+@how && dump_densities("Third cut");
 
 @how = reverse @how;
 
@@ -311,7 +315,7 @@ for my $body_id (@body_ids) {
         db_set_excavated_by($body_id, $target->{body_id});
         eval {
           $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
-          emit("Sending excavator to $target->{name} at ($target->{x},$target->{y})", $body_id);
+          emit("Sending excavator to $how[0]{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
           1;
         } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
         shift(@how);
@@ -323,16 +327,47 @@ for my $body_id (@body_ids) {
   }
 }
 
+sub dump_densities {
+  my $label = shift;
+
+  emit(join("\n", "$label ore densities:",
+            map { sprintf("%6d %-13s%6d %-13s%6d %-13s%6d %-13s",
+                          $ores{$ores[$_]}, $ores[$_],
+                          $ores{$ores[$_ + 5]}, $ores[$_ + 5],
+                          $ores{$ores[$_ + 10]}, $ores[$_ + 10],
+                          $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
+  emit(join("\n", "Using planet types:",
+            map { type_string($_) } @how)) if @how;
+  my $min = min(values %ores);
+  my $median = (sort { $a <=> $b } values %ores)[@ores / 2];
+  my $sum = sum(values %ores);
+  emit("Minimum $min, median $median, total $sum");
+}
+
 sub db_find_body {
   my ($subtype, $x, $y) = @_;
-  my $result = $star_db->selectrow_hashref(qq(
-    select body_id, name, x, y from orbitals
-    where subtype = ? and empire_id is null and excavated_by is null
-    order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
-    limit 1
-  ), {}, $subtype, $x, $x, $y, $y);
-  if ($debug > 1) {
-    emit_json("Find body: select body_id, name, x, y from orbitals where subtype = '$subtype' and empire_id is null and excavated_by is null order by (x - $x) * (x - $x) + (y - $y) * (y - $y) limit 1", $result);
+  my $result;
+  if ($avoid_populated) {
+    $result = $star_db->selectrow_hashref(qq(
+      select o.body_id, o.name, o.x, o.y from orbitals o
+      left join (
+        select star_id from orbitals
+        where empire_id is not null and empire_id <> ?
+      ) s on (o.star_id = s.star_id)
+      where o.subtype = ? and o.empire_id is null and o.excavated_by is null and s.star_id is null
+      order by (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)
+      limit 1
+    ), {}, $client->empire_status->{id}, $subtype, $x, $x, $y, $y);
+  } else {
+    $result = $star_db->selectrow_hashref(qq(
+      select body_id, name, x, y from orbitals
+      where subtype = ? and empire_id is null and excavated_by is null
+      order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
+      limit 1
+    ), {}, $subtype, $x, $x, $y, $y);
+    if ($debug > 1) {
+      emit_json("Find body: select body_id, name, x, y from orbitals where subtype = '$subtype' and empire_id is null and excavated_by is null order by (x - $x) * (x - $x) + (y - $y) * (y - $y) limit 1", $result);
+    }
   }
   return $result;
 }

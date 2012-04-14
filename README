@@ -79,8 +79,9 @@ scowler [--body Name]
 repairman [--body Name]
   Repair any damaged buildings.
 
-archaeologist [--body Name] --ore type
-  Search for a glyph in a bunch of ore.
+archaeologist [--body Name] [--db file]
+  Maintain excavators.  Requires a sqlite db of stars and bodies, created
+  by star_db_util.  It has a bunch of other options, too; read the source.
 
 trade_push --body Name --target Name --ship Name --cargo 'stuff' [--stay]
   Push some resources between two planets.

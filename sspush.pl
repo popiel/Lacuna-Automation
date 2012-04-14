@@ -1,5 +1,9 @@
 #!/usr/bin/perl
 
+# tries to top off a space station, calculating just enough to fill it at time of arrival
+# doesn't take into account ships in flight (or even the cargo capacity of the ship being sent)
+# so not good for higher usage or farther away stations
+
 use strict;
 use warnings;
 
@@ -14,7 +18,7 @@ autoflush STDOUT 1;
 autoflush STDERR 1;
 
 my %opt;
-GetOptions( \%opt, 'config=s', 'from=s', 'to=s', 'ship=s', 'debug', 'quiet', 'log=s' )
+GetOptions( \%opt, 'config=s', 'from=s', 'to=s', 'ship=s', 'debug', 'quiet', 'log=s', 'types=s' )
     or die "$0 --config=foo.json --from=PlanetBar --to=SpaceStationFoo --ship=shipname\n";
 
 $opt{'config'} ||= 'config.json';
@@ -77,7 +81,7 @@ for my $supply_pod ( grep $to_buildings->{'buildings'}{$_}{'name'} eq 'Supply Po
 
 my $to_status = $client->body_status($to_id);
 my %need;
-for my $resource_type ( sort keys %resources ) {
+for my $resource_type ( $opt{'types'} ? split /,/, $opt{'types'} : sort keys %resources ) {
     $need{$resource_type} = int( $to_status->{ $resource_type . '_capacity' } - $to_status->{ $resource_type . '_stored' } - $to_status->{ $resource_type . '_hour' } * $ship->{'estimated_travel_time'} / 3600 ) - ( $supply_pod_capacity{$resource_type} || 0 ) - 1;
 #    printf "%s\t%s\t%s/%s\t%s/hr\n", $resource_type, $need{$resource_type}, map $to_status->{$resource_type . "_$_"}, qw/stored capacity hour/;
     delete $need{$resource_type} if $need{$resource_type} <= 0;
