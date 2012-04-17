@@ -125,8 +125,9 @@ sub log_call {
   my $filename = join(".", format_time($time, 1), $$, sprintf("%03d", $count), $api, $message->{method});
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
+  my $pathname = File::Spec->catfile($dir, $filename);
   my $file;
-  open($file, ">:utf8", File::Spec->catfile($dir, $filename)) or croak "Could not log call: $!";
+  open($file, ">:utf8", $pathname) or croak "Could not log call: $pathname: $!";
   print $file encode_json({
     api => $api,
     message => $message,
@@ -882,6 +883,14 @@ sub spy_name {
 sub spy_assign {
   my ($self, $where, $who, $what) = @_;
   my $result = $self->call(intelligence => assign_spy => $where, $who, $what);
+  $self->cache_invalidate(type => 'spy_list', id => $result->{status}{body}{id});
+  return $result;
+}
+
+sub spy_retrain {
+  my ($self, $where, $who, $type) = @_;
+  my $trainer = $self->find_building($where, "$type Training");
+  my $result = $self->call($trainer->{url} => train_spy => $trainer->{id}, $who);
   $self->cache_invalidate(type => 'spy_list', id => $result->{status}{body}{id});
   return $result;
 }
