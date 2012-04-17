@@ -21,6 +21,7 @@ my $debug = 0;
 my $quiet = 0;
 my $hall_count = 0;
 my $hall_max = 0;
+my $reserve;
 my %made;
 
 GetOptions(
@@ -28,12 +29,15 @@ GetOptions(
   "body=s"      => \@body_name,
   "count=i"     => \$hall_count,
   "max=i"       => \$hall_max,
+  "reserve=i"   => \$reserve,
   "for=s"       => \$for_name,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 die "Must specify body\n" if ( $hall_count || $hall_max ) && !@body_name;
+
+if ($hall_max) { $reserve //= 1 }
 
 my $client = Client->new(config => $config_name);
 eval {
@@ -93,7 +97,7 @@ eval {
       my %extra;
       my %possible;
       for my $recipe (@recipes) {
-        my $min = List::Util::min(map { scalar(@{$glyphs{$_}}) } @$recipe);
+        my $min = List::Util::max(0, -$reserve + List::Util::min(map { scalar(@{$glyphs{$_}}) } @$recipe));
         $possible{$recipe} = $min;
         for my $glyph (@$recipe) {
           $extra{$glyph} = @{$glyphs{$glyph}} - $min;
