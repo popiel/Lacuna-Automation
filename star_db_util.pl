@@ -31,6 +31,12 @@ GetOptions(\%opts,
     'planet=s@',
     'no-fetch',
     'no-vacuum',
+    'oracle',
+    'oracle-max-rpc=i', # default 1000
+    'oracle-min-dist=i', # default 0
+    'oracle-max-dist|oracle-distance=i', # default max distance from level
+    'oracle-include=s', # LIKE pattern of star names to include, e.g. PTSU%
+    'oracle-exclude=s', # LIKE pattern of star names to exclude, e.g. S.M.A%
     'scan-nearby',
     'scan-sectors=i',
     'load-stars:s',
@@ -226,6 +232,7 @@ unless ($opts{'no-fetch'}) {
 
   # Scan each planet
   my @searchboxes;
+  my %probed;
   for my $planet_name ( keys %planets ) {
     if ( keys %do_planets ) {
       next unless $do_planets{ normalize_planet($planet_name) };
@@ -241,6 +248,7 @@ unless ($opts{'no-fetch'}) {
     if ($obs) {
       my $probed_stars = $client->get_probed_stars($obs);
       push( @stars, @{ $probed_stars->{'stars'} } );
+      $probed{$_->{id}}++ for @stars;
     }
     if ( $opts{'scan-nearby'} ) {
       my $sector_size = 30;
@@ -293,44 +301,64 @@ unless ($opts{'no-fetch'}) {
       #warn "***DEBUG*** Adding to cache: [$x_min,$y_min], [$x_max,$y_max]\n";
       push @searchboxes, [ $x_min, $x_max, $y_min, $y_max ];
     }
-        my %seen;
-        @stars = grep { ! $seen{$_->{'name'}}++ } @stars;
+    my %seen;
+    @stars = grep { ! $seen{$_->{'name'}}++ } @stars;
 
-        for my $star (@stars) {
-            if (my $row = star_exists($star->{x}, $star->{y})) {
-                if ((($row->{name}||q{}) ne $star->{name})
-                        or (($row->{color}||q{}) ne $star->{color})
-                        or (($row->{zone}||q{}) ne $star->{zone})
-                        or ($star->{station} and (($row->{station_id}||q{}) ne $star->{station}{id})) ) {
-                    update_star($star)
-                } else {
-                    mark_star_checked(@{$row}{qw/x y/});
-                }
-            } else {
-                insert_star($star);
-            }
-
-            if ($star->{bodies} and @{$star->{bodies}}) {
-                for my $body (@{$star->{bodies}}) {
-                    $body->{body_id} = $body->{id};
-                    if (my $row = orbital_exists($body->{x}, $body->{y})) {
-                        if ((($row->{type}||q{}) ne $body->{type})
-                                or (($row->{body_id}||q{}) ne $body->{body_id})
-                                or (($row->{name}||q{}) ne $body->{name})
-                                or ($body->{empire} and ($row->{empire_id}||q{}) ne $body->{empire}{id})
-                                or (defined($body->{size}) and ($row->{size}||q{}) ne $body->{size}) 
-                                or ($body->{station} and ($row->{station_id}||q[]) ne $body->{station}{id}) ) {
-                            update_orbital($body);
-                        } else {
-                            mark_orbital_checked(@{$body}{qw/x y/});
-                        }
-                    } else {
-                        insert_orbital($body);
-                    }
-                }
-            }
-        }
+    for my $star (@stars) {
+      process_star($star);
     }
+  }
+
+  if ($opts{'oracle'}) {
+    my $oracle_rpc = $opts{'oracle-max-rpc'} || 1000;
+    for my $planet_name ( keys %planets ) {
+      if ( keys %do_planets ) {
+        next unless $do_planets{ normalize_planet($planet_name) };
+      }
+      my $result    = $client->body_buildings( $planets{$planet_name} );
+      my $buildings = $result->{buildings};
+      my $planet    = $result->{status}->{body};
+      my $oracle = find_oracle($buildings);
+      if ($oracle) {
+        my @and;
+        if (%probed) {
+          push @and, q{id not in (} . join(',', sort { $a <=> $b } keys %probed) . q{)};
+        }
+        if ($opts{'oracle-include'}) {
+          push @and, "name like '$opts{'oracle-include'}'";
+        }
+        if ($opts{'oracle-exclude'}) {
+          push @and, "name not like '$opts{'oracle-exclude'}'";
+        }
+        my $dist = "(($planet->{x}-x)*($planet->{x}-x)+($planet->{y}-y)*($planet->{y}-y))";
+        my $max_dist = $buildings->{$oracle}{level} * 10;
+        if ($opts{'oracle-max-dist'} && $opts{'oracle-max-dist'} < $max_dist) {
+          $max_dist = $opts{'oracle-max-dist'};
+        }
+        if ($opts{'oracle-min-dist'}) {
+          push @and, "$dist between @{[$opts{'oracle-min-dist'}**2]} and @{[$max_dist**2]}";
+        }
+        else {
+          push @and, "$dist <= @{[$max_dist**2]}";
+        }
+        my $sql = 'select id from stars where ' . join(' and ', @and) . ' order by ' . $dist;
+        my $star_ids_sth = $star_db->prepare($sql);
+        $star_ids_sth->execute();
+        my @stars;
+        while ( my ($star_id) = $star_ids_sth->fetchrow_array ) {
+          last if --$oracle_rpc < 0;
+          my $get_star = eval { $client->call('oracleofanid', 'get_star', $oracle, $star_id) };
+          if ($get_star) {
+            push @stars, $get_star->{star};
+          }
+        }
+        for my $star (@stars) {
+          $probed{$star->{id}}++;
+          process_star($star);
+        }
+      }
+    }
+  }
 }
 
 $star_db->commit;
@@ -348,6 +376,41 @@ unless ($opts{'no-fetch'}) {
 
 output("$client->{total_calls} api calls made.\n") if $client->{total_calls};
 exit 0;
+
+sub process_star {
+  my ($star) = @_;
+  if (my $row = star_exists($star->{x}, $star->{y})) {
+    if ((($row->{name}||q{}) ne $star->{name})
+        or (($row->{color}||q{}) ne $star->{color})
+        or (($row->{zone}||q{}) ne $star->{zone})
+        or ($star->{station} and (($row->{station_id}||q{}) ne $star->{station}{id})) ) {
+      update_star($star)
+    } else {
+      mark_star_checked(@{$row}{qw/x y/});
+    }
+  } else {
+    insert_star($star);
+  }
+  if ($star->{bodies} and @{$star->{bodies}}) {
+    for my $body (@{$star->{bodies}}) {
+      $body->{body_id} = $body->{id};
+      if (my $row = orbital_exists($body->{x}, $body->{y})) {
+        if ((($row->{type}||q{}) ne $body->{type})
+            or (($row->{body_id}||q{}) ne $body->{body_id})
+            or (($row->{name}||q{}) ne $body->{name})
+            or ($body->{empire} and ($row->{empire_id}||q{}) ne $body->{empire}{id})
+            or (defined($body->{size}) and ($row->{size}||q{}) ne $body->{size}) 
+            or ($body->{station} and ($row->{station_id}||q[]) ne $body->{station}{id}) ) {
+          update_orbital($body);
+        } else {
+          mark_orbital_checked(@{$body}{qw/x y/});
+        }
+      } else {
+        insert_orbital($body);
+      }
+    }
+  }
+}
 
 sub ore_types {
     return qw{
@@ -538,6 +601,19 @@ sub find_observatory {
 
     return if not $obs_id;
     return $obs_id;
+}
+
+
+sub find_oracle {
+    my ($buildings) = @_;
+
+    # Find an Oracle of Anid
+    my $oracle_id = first {
+            $buildings->{$_}->{name} eq 'Oracle of Anid'
+    } keys %$buildings;
+
+    return if not $oracle_id;
+    return $oracle_id;
 }
 
 
