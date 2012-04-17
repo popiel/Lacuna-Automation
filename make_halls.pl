@@ -20,17 +20,20 @@ my $equalize = 0;
 my $debug = 0;
 my $quiet = 0;
 my $hall_count = 0;
+my $hall_max = 0;
+my %made;
 
 GetOptions(
   "config=s"    => \$config_name,
   "body=s"      => \@body_name,
   "count=i"     => \$hall_count,
+  "max=i"       => \$hall_max,
   "for=s"       => \$for_name,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
-die "Must specify body\n" if $hall_count && !@body_name;
+die "Must specify body\n" if ( $hall_count || $hall_max ) && !@body_name;
 
 my $client = Client->new(config => $config_name);
 eval {
@@ -102,9 +105,9 @@ eval {
 
       die "Insufficient glyphs to make $hall_count halls\n" if $max_halls < $hall_count;
 
-      while ($max_halls > $hall_count) {
+      while ( $max_halls > ( $hall_max || $hall_count ) ) {
         for my $recipe (@recipes) {
-          last if $max_halls <= $hall_count;
+          last if $max_halls <= ( $hall_max || $hall_count );
           if ($possible{$recipe}) { $possible{$recipe}--; $max_halls--; }
         }
       }
@@ -118,10 +121,11 @@ eval {
           print "Making hall with ".join(", ", @$recipe).": ".join(", ", @ids)."\n";
           my $result = $client->call(archaeology => assemble_glyphs => $arch_id, [ @ids ]);
           print "Failed to make hall!\n" if $result->{item_name} ne "Halls of Vrbansk";
+          $made{$body_id}++;
         }
       }
 
-      if ($for_id) {
+      if ($for_id && $made{$body_id}) {
         my $trade_id = (grep($_->{name} eq "Trade Ministry", @buildings))[0]{id};
         unless ($trade_id) {
           warn "No Trade Ministry on $planets->{$body_id}\n";
@@ -132,7 +136,7 @@ eval {
         my $plans = $client->call(trade => get_plans => $trade_id);
         my $psize = $plans->{cargo_space_used_each};
         my @plans = grep { $_->{name} eq "Halls of Vrbansk" } @{$plans->{plans}};
-        $#plans = $hall_count - 1 if @plans > $hall_count;
+        $#plans = $made{$body_id} - 1 if @plans > $made{$body_id};
 
         my @ships = @{$client->call(trade => get_trade_ships => $trade_id, $for_id)->{ships}};
         # Avoid ships already allocated to trade routes
@@ -144,15 +148,15 @@ eval {
         @ships = sort { $b->{speed} <=> $a->{speed} } @ships;
         my $top = 0;
         my $move_count = $ships[0]{plan_count};
-        $move_count += $ships[++$top]{plan_count} while $top < $#ships && $move_count < $hall_count;
+        $move_count += $ships[++$top]{plan_count} while $top < $#ships && $move_count < $made{$body_id};
         $#ships = $top;
-        print "Can only ship $move_count halls. :-(\n" if $move_count < $hall_count;
+        print "Can only ship $move_count halls. :-(\n" if $move_count < $made{$body_id};
 
         # Choose the big ships from among the sufficient chosen ships (and free up any extra fast small ships)
         @ships = sort { $b->{hold_size} <=> $a->{hold_size} } @ships;
         $top = 0;
         $move_count = $ships[0]{plan_count};
-        $move_count += $ships[++$top]{plan_count} while $top < $#ships && $move_count < $hall_count;
+        $move_count += $ships[++$top]{plan_count} while $top < $#ships && $move_count < $made{$body_id};
         $#ships = $top;
 
         for my $ship (@ships) {
@@ -165,3 +169,5 @@ eval {
     }
   }
 };
+
+exit( ! %made );
