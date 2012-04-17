@@ -21,9 +21,12 @@ GetOptions(
 my $client = Client->new(config => $config_name);
 my $planets = $client->empire_status->{planets};
 
+my $body_pattern = $body_name;
+$body_pattern =~ s/(\W)/\\$1/g;
+
 my %plans;
 for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys(%$planets)) {
-  next if $body_name && $body_name ne $planets->{$body_id};
+  next if $body_name && $planets->{$body_id} !~ /$body_pattern/;
   print "$planets->{$body_id} ($body_id):\n";
   my $buildings = $client->body_buildings($body_id);
   my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
