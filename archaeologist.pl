@@ -48,6 +48,7 @@ my $max_build_time = 86400;
 my $max_distance = 100;
 my $greedy = 0;
 my $avoid_populated = 0;
+my $noaction = 0;
 my $debug = 0;
 my $quiet = 0;
 
@@ -59,7 +60,8 @@ GetOptions(
   "max_distance|distance=i" => \$max_distance,
   "greedy!"   => \$greedy,
   "avoid_populated!" => \$avoid_populated,
-  "debug+"    => \$debug,
+  "noaction|dryrun|n!" => \$noaction,
+  "debug|d+"    => \$debug,
   "quiet"     => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
@@ -94,10 +96,10 @@ if ((@body_ids != @body_names)) {
   exit 1;
 }
 @body_names = map { $planets->{$_} } @body_ids;
-my %arches = map { ($_, ([$client->find_building($_, "Archaeology Ministry")]||[{}])->[0]) } @body_ids;
-my %ports  = map { ($_, ([$client->find_building($_, "Space Port")]||[{}])->[0]) } @body_ids;
-my %yards  = map { ($_, ([$client->find_building($_, "Shipyard")]||[{}])->[0]) } @body_ids;
-# Filter down to just those bodies with archaeology ministries
+my %arches = map { ($_, scalar(eval { $client->find_building($_, "Archaeology Ministry") } )) } @body_ids;
+my %ports  = map { ($_, scalar(eval { $client->find_building($_, "Space Port"          ) } )) } @body_ids;
+my %yards  = map { ($_, scalar(eval { $client->find_building($_, "Shipyard"            ) } )) } @body_ids;
+# Filter down to just those bodies with archaeology ministries, spaceports, and shipyards
 my @body_ids = grep { ref($arches{$_}) eq 'HASH' && ref($ports{$_}) eq 'HASH' && ref($yards{$_}) eq 'HASH' } @body_ids;
 $debug > 1 && emit_json("Pruned body_ids", \@body_ids);
 $debug > 1 && emit_json("Archaeology Ministries", \%arches);
@@ -290,7 +292,7 @@ for my $body_id (@body_ids) {
     for my $yard (@yards) {
       if ($yard->{additional}) {
         eval {
-          $client->yard_build($yard->{id}, "excavator", $yard->{additional});
+          $noaction or $client->yard_build($yard->{id}, "excavator", $yard->{additional});
           emit("Building $yard->{additional} excavators", $body_id);
           1;
         } or emit("Couldn't build excavators: $@", $body_id);
@@ -313,7 +315,7 @@ for my $body_id (@body_ids) {
       } else {
         db_set_excavated_by($body_id, $target->{body_id});
         eval {
-          $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
+          $noaction or $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
           emit("Sending excavator to $how[0]{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
           1;
         } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
