@@ -126,6 +126,7 @@ sub log_call {
   $filename =~ s-/--g;
   $filename =~ s- -_-g;
   my $pathname = File::Spec->catfile($dir, $filename);
+  $pathname =~ s/:/-/g if $pathname =~ /\\/;
   my $file;
   open($file, ">:utf8", $pathname) or croak "Could not log call: $pathname: $!";
   print $file encode_json({
