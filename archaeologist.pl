@@ -308,6 +308,30 @@ do {
 
 @how = reverse @how;
 
+if ($purge) {
+  for my $body_id (@body_ids) {
+    my @excavators = @{$excavators{$body_id}{excavators}};
+    my @keep = shift @excavators;
+    while (@excavators) {
+      my $test = shift @excavators;
+      my $match = -1;
+      for my $j (0..$#how) {
+        my @mismatch = grep { $test->{body}{ore}{$_} != $how[$j]{$_} } @ores;
+        $match = $j if !@mismatch;
+      }
+      if ($match >= 0) {
+        push(@keep, $test);
+        splice(@how, $match, 1);
+      } else {
+        emit("Abandoning excavator $test->{id} on $test->{body}{name}", $body_id);
+        $noaction or eval { $client->call(archaeology => abandon_excavator => $arches{$body_id}{id}, $test->{id}) }
+          or emit("Couldn't abandon excavator: $@", $body_id);
+      }
+    }
+    $excavators{$body_id}{excavators} = [ @keep ];
+  }
+}
+
 $debug && emit("Maximum build time $max_build_time seconds");
 
 for my $body_id (@body_ids) {
@@ -341,6 +365,10 @@ for my $body_id (@body_ids) {
         eval {
           $noaction or $client->yard_build($yard->{id}, "excavator", $yard->{additional});
           emit("Building $yard->{additional} excavators", $body_id);
+          1;
+        } or eval {
+          $noaction or $client->yard_build($yard->{id}, "excavator", 1);
+          emit("Building 1 excavator", $body_id);
           1;
         } or emit("Couldn't build excavators: $@", $body_id);
       }
