@@ -46,23 +46,27 @@ my @body_names;
 my $db_file = "stars.db";
 my $max_build_time = 86400;
 my $max_distance = 100;
+my @bias;
 my $greedy = 0;
 my $avoid_populated = 0;
 my $noaction = 0;
+my $purge = 0;
 my $debug = 0;
 my $quiet = 0;
 
 GetOptions(
-  "config=s"  => \$config_name,
-  "body|planet|b=s"    => \@body_names,
-  "db=s"      => \$db_file,
+  "config=s"                    => \$config_name,
+  "body|planet|b=s"             => \@body_names,
+  "db=s"                        => \$db_file,
   "max_build_time|build|fill=s" => \$max_build_time,
-  "max_distance|distance=i" => \$max_distance,
-  "greedy!"   => \$greedy,
-  "avoid_populated!" => \$avoid_populated,
-  "noaction|dryrun|n!" => \$noaction,
-  "debug|d+"    => \$debug,
-  "quiet"     => \$quiet,
+  "max_distance|distance=i"     => \$max_distance,
+  "bias=s"                      => \@bias,
+  "greedy!"                     => \$greedy,
+  "avoid_populated!"            => \$avoid_populated,
+  "noaction|dryrun|n!"          => \$noaction,
+  "purge!"                      => \$purge,
+  "debug|d+"                    => \$debug,
+  "quiet"                       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
@@ -136,9 +140,48 @@ for my $body_id (@body_ids) {
   }
 }
 
+my %bias = map { ($_, 1) } @ores;
+if (@bias) {
+  @bias = map { split(",", $_) } @bias;
+  for my $b (@bias) {
+    my ($ore,$amount) = split("=", $b);
+    $bias{$ore} or die "Unrecognized ore '$ore' in bias list\n";
+    $amount = 0.0001 if $amount == 0;
+    $bias{$ore} = $amount;
+  }
+  my %backup = %ores;
+  %ores = %bias;
+  dump_densities("Bias");
+  %ores = %backup;
+}
+
 my @how;
 dump_densities("Total");
 emit("$active excavators active out of $possible excavators possible");
+
+if ($purge) {
+  $active = 0;
+  %ores = ();
+  for my $body_id (@body_ids) {
+    my $excavator = $excavators{$body_id}{excavators}[0];
+    for my $ore (keys(%{$excavator->{body}{ore}})) {
+      $ores{$ore} += $excavator->{body}{ore}{$ore};
+    }
+    @ores = sort keys %ores;
+    my $port = $client->find_building($body_id, "Space Port");
+    my $ships = $client->port_all_ships($port->{id});
+    my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
+    my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
+    for my $excavator (@travelling) {
+      db_set_excavated_by($body_id, $excavator->{to}{id});
+      $excavator->{body}{ore} = db_lookup_ores($excavator->{to}{id});
+      $active++;
+      for my $ore (keys(%{$excavator->{body}{ore}})) {
+        $ores{$ore} += $excavator->{body}{ore}{$ore};
+      }
+    }
+  }
+}
 
 my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ores[$_], $density[$_]) } (0..$#ores); $density{subtype} = $density[$#density]; \%density } qw(
 1000:1:1:1:1000:1000:1000:1000:1:1000:1:1000:1000:1:1:1:1:1:1000:1000:p11
@@ -189,7 +232,7 @@ my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ore
 for (1..($possible - $active)) {
   my $type;
   if ($greedy) {
-    my $worst = (sort { $ores{$a} <=> $ores{$b} } @ores)[0];
+    my $worst = (sort { $ores{$a} / $bias{$a} <=> $ores{$b} / $bias{$b} } @ores)[0];
     $type = (sort { $b->{$worst} <=> $a->{$worst} } @planet_types)[0];
   } else {
     $type = $planet_types[$_ % 2];
@@ -203,17 +246,19 @@ $debug && dump_densities("First cut");
 my $change;
 do {
   $change = 0;
-  my $min = min(values %ores);
-  $debug && emit("Minimum ore value: $min ".join(", ", grep { $ores{$_} == $min } @ores));
+  my %weighted = map { ($_, $ores{$_} / $bias{$_}) } @ores;
+  my $min = min(values %weighted);
+  $debug && emit("Minimum ore value: $min ".join(", ", grep { $weighted{$_} == $min } @ores));
   for my $j (0..$#how) {
-    my %reduced = map { $_, $ores{$_} - $how[$j]{$_} } @ores;
+    my %reduced = map { $_, $weighted{$_} - $how[$j]{$_} / $bias{$_} } @ores;
     for my $type (@planet_types) {
-      my %increased = map { $_, $reduced{$_} + $type->{$_} } @ores;
+      my %increased = map { $_, $reduced{$_} + $type->{$_} / $bias{$_} } @ores;
       my $worst = min(values %increased);
       $debug > 2 && emit("Yield $worst after replacing pos $j with ".type_string($type));
       if ($min < $worst) {
         $min = $worst;
-        %ores = %increased;
+        %weighted = %increased;
+        %ores = map { $_, $ores{$_} - $how[$j]{$_} + $type->{$_} } @ores;
         $how[$j] = $type;
         $change = 1;
         $debug && emit("KEEPER! Yield $worst after replacing pos $j with ".type_string($type));
@@ -227,8 +272,9 @@ $debug && dump_densities("Second cut");
 my $change;
 do {
   $change = 0;
-  my $min = min(values %ores);
-  $debug && emit("Minimum ore value: $min ".join(", ", grep { $ores{$_} == $min } @ores));
+  my %weighted = map { ($_, $ores{$_} / $bias{$_}) } @ores;
+  my $min = min(values %weighted);
+  $debug && emit("Minimum ore value: $min ".join(", ", grep { $weighted{$_} == $min } @ores));
   my %outer;
   for my $j (0..$#how) {
     next if $outer{$how[$j]{subtype}};
@@ -237,15 +283,16 @@ do {
     for my $k (($j + 1)..$#how) {
       next if $inner{$how[$k]{subtype}};
       $inner{$how[$k]{subtype}} = 1;
-      my %reduced = map { $_, $ores{$_} - $how[$j]{$_} - $how[$k]{$_} } @ores;
+      my %reduced = map { $_, $weighted{$_} - $how[$j]{$_} / $bias{$_} - $how[$k]{$_} / $bias{$_} } @ores;
       for my $type1 (@planet_types) {
         for my $type2 (@planet_types) {
-          my %increased = map { $_, $reduced{$_} + $type1->{$_} + $type2->{$_} } @ores;
+          my %increased = map { $_, $reduced{$_} + $type1->{$_} / $bias{$_} + $type2->{$_} / $bias{$_} } @ores;
           my $worst = min(values %increased);
           $debug > 2 && emit("Yield $worst after replacing pos $j, $k with ".type_string($type1).", ".type_string($type2));
           if ($min < $worst) {
             $min = $worst;
-            %ores = %increased;
+            %weighted = %increased;
+            %ores = map { $_, $ores{$_} - $how[$j]{$_} - $how[$k]{$_} + $type1->{$_} + $type2->{$_} } @ores;
             $how[$j] = $type1;
             $how[$k] = $type2;
             $change = 1;

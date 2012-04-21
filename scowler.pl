@@ -57,7 +57,8 @@ if ($debug) {
   }
 }
 
-my $scow = (grep($_->{type} eq "scow" && $_->{task} eq "Docked" && $_->{hold_size} <= $status->{waste_stored}, @{$ships->{available}}))[0];
+my @scows = grep($_->{type} eq "scow" && $_->{task} eq "Docked" && $_->{hold_size} <= $status->{waste_stored}, @{$ships->{available}});
+my $scow = (sort { $b->{hold_size} <=> $a->{hold_size} } @scows)[0];
 emit("Using ship: $scow->{id}") if $debug;
 
 exit(0) unless $scow;
