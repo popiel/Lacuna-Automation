@@ -890,6 +890,7 @@ sub spy_assign {
 
 sub spy_retrain {
   my ($self, $where, $who, $type) = @_;
+  substr($type, 0, 1) =~ tr/a-z/A-Z/;
   my $trainer = $self->find_building($where, "$type Training");
   my $result = $self->call($trainer->{url} => train_spy => $trainer->{id}, $who);
   $self->cache_invalidate(type => 'spy_list', id => $result->{status}{body}{id});
