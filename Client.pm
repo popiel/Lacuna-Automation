@@ -556,8 +556,9 @@ sub recycle_recycle {
   my $water = shift;
   my $ore = shift;
   my $energy = shift;
+  my $type = shift || "wasterecycling";
 
-  my $result = $self->call(wasterecycling => recycle => $building_id, $water, $ore, $energy, 0);
+  my $result = $self->call($type => recycle => $building_id, $water, $ore, $energy, 0);
   if ( $result ) {
       $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
       $self->cache_invalidate( type => 'building_view', id => $building_id );
