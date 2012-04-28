@@ -73,6 +73,7 @@ isa_ok($runner, 'Client::TaskRunner');
 		'callback'  => sub { 
 			$_[0]->remove_cron() if ++$ran_stub > 1; 
 		},
+		'description' => 'Testing cron scheduling',
 	));
 	$runner->run();
 	is($ran_stub, 2);

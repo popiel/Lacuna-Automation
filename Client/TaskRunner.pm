@@ -58,16 +58,22 @@ sub run {
 sub run_task {
 	my ($self, $task, $started_at) = @_;
 	my $success;
+	my $duration;
 	eval {
 		$task->clear_schedule();
+		$duration = time();
 		$task->run_task($self);
+		$duration = time() - $duration;
 		$task->schedule_next($self, $started_at);
 		$success = 1;
 	};
 	if (!$success) {
-		print "Failed to run task type: ".ref($task)."\n";
+		print "Failed to run task: ".$task->name()."\n";
 		print "Error was: " . $@ . "\n";
 		return 0;
+	}
+	else {
+		print "Finished running task: ".$task->name().", in $duration seconds\n" if $self->debug();
 	}
 	return 1;
 }

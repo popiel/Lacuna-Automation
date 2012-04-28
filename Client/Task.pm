@@ -43,7 +43,9 @@ has 'niceness' => (
 	isa => 'Int',
 	default => 10,
 );
-
+has 'description' => (
+	is => 'rw', isa => 'Str',
+);
 # other things, like expected rpc usage, or historical runtimes
 
 
@@ -61,6 +63,11 @@ sub schedule_next {
 		$self->next_run( $self->cron_spec()->increment()->epoch() );
 		$runner->add_task($self);
 	}
+}
+
+sub name {
+	my ($self) = @_;
+	return ref($self) . ( $self->description() ? "(".$self->description().")" : '' );
 }
 
 1;
