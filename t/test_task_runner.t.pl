@@ -4,6 +4,7 @@ my $script_path = dirname(__FILE__);
 use lib "$script_path/..";
 use Test::More;
 use Test::Mock::LWP;
+use DateTime::Event::Cron;
 
 BEGIN {
 	use_ok('Client');
@@ -38,12 +39,12 @@ isa_ok($runner, 'Client::TaskRunner');
 	isa_ok($task, 'Client::Task');
 
 	# basic one-off task
-	$runner->add_scheduled_task(time(), $task);
+	$runner->add_task($task);
 	$runner->run();
 	is($ran_stub, 1);
 
 	$task->repeat_after(1);
-	$runner->add_scheduled_task(time(), $task);
+	$runner->add_task($task);
 	$runner->run();
 	is($ran_stub, 3);
 	
@@ -53,13 +54,30 @@ isa_ok($runner, 'Client::TaskRunner');
 	# verify that the event loop works if a task takes longer than the time until the next ccheduled task
 	my @ran_stub;
 	$runner = Client::TaskRunner->new('client' => $client, 'debug' => 1);
-	$runner->add_scheduled_task(time(), Client::Task->new( 'callback' => sub { sleep 3; push(@ran_stub, 'cb1'); } ));
-	$runner->add_scheduled_task(time()+2, Client::Task->new( 'callback' => sub { push(@ran_stub, 'cb2') }));
+	$runner->add_task(Client::Task->new( 'callback' => sub { sleep 3; push(@ran_stub, 'cb1'); } ));
+	$runner->add_task(Client::Task->new( 
+		'callback' => sub { push(@ran_stub, 'cb2') }, 
+		'next_run' => time() + 2
+	));
 	$runner->run();
 	is_deeply(\@ran_stub, ['cb1', 'cb2']);
 }
 
+{
+	my $ran_stub = 0;
+	$runner = Client::TaskRunner->new('client' => $client, 'debug' => 1);
+	# TODO test cron scheduling
+	$runner->add_task(Client::Task->new(
+		# TODO, replace next_run default with cron next run
+		'cron_spec' => DateTime::Event::Cron->new('* * * * *'),
+		'callback'  => sub { 
+			$_[0]->remove_cron() if ++$ran_stub > 1; 
+		},
+	));
+	$runner->run();
+	is($ran_stub, 2);
 
+}
 
-done_testing(8);
+done_testing(10);
 

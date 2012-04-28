@@ -59,7 +59,9 @@ sub run_task {
 	my ($self, $task, $started_at) = @_;
 	my $success;
 	eval {
+		$task->clear_schedule();
 		$task->run_task($self);
+		$task->schedule_next($self, $started_at);
 		$success = 1;
 	};
 	if (!$success) {
@@ -67,10 +69,14 @@ sub run_task {
 		print "Error was: " . $@ . "\n";
 		return 0;
 	}
-	elsif ( $task->going_again() ) {
-		$self->add_scheduled_task($started_at + $task->repeat_after(), $task);
-	}
 	return 1;
+}
+
+sub add_task {
+	my ($self, $task) = @_;
+	$task->next_run(time()) unless $task->scheduled();
+	$self->add_scheduled_task($task->next_run(), $task);
+	return $task;
 }
 
 1;
