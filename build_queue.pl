@@ -282,6 +282,12 @@ for (my $j = $[; $j <= $#queue; $j++) {
     my $target = (grep { $_->{name} eq $name && (!$level || $_->{level} == $level) } @buildings)[0];
     if ($target) {
       if (@halls <= $target->{level}) {
+        if ($queue[$j-1] !~ /-?build Halls of Vrbansk/) {
+          splice(@queue, $j, 0, "build Halls of Vrbansk\n") for (@halls..$target->{level});
+          write_queue();
+          $j--;
+          next;
+        }
         emit("Insufficient halls to upgrade $name: have ".scalar(@halls).", need ".($target->{level}+1)) unless $quiet && $sleepy;
         if ($queue[$j] !~ /^\-/) {
           splice(@queue, $j, 1, "-$queue[$j]");

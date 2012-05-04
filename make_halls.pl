@@ -21,6 +21,8 @@ my $debug = 0;
 my $quiet = 0;
 my $hall_count = 0;
 my $hall_max = 0;
+my $low = 0;
+my $high = 0;
 my $reserve;
 my %made;
 
@@ -31,9 +33,16 @@ GetOptions(
   "max=i"       => \$hall_max,
   "reserve=i"   => \$reserve,
   "for=s"       => \$for_name,
+  "a=i"         => \$low,
+  "z=i"         => \$high,
   "debug"       => \$debug,
   "quiet"       => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
+
+if ($high && $low) {
+  $hall_count = ($hall_count || 1) * (($high * ($high + 1) / 2) - ($low * ($low + 1) / 2));
+  print "Making $hall_count halls.\n";
+}
 
 die "Must specify body\n" if ( $hall_count || $hall_max ) && !@body_name;
 
