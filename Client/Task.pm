@@ -63,6 +63,7 @@ sub schedule_next {
 		$self->next_run( $self->cron_spec()->increment()->epoch() );
 		$runner->add_task($self);
 	}
+	# else we're done, not repeating
 }
 
 sub name {

@@ -73,7 +73,7 @@ sub run_task {
 		return 0;
 	}
 	else {
-		print "Finished running task: ".$task->name().", in $duration seconds\n" if $self->debug();
+		print "Finished running task: ".$task->name().", in $duration seconds\n";
 	}
 	return 1;
 }
