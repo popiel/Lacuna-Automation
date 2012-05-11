@@ -14,7 +14,7 @@ BEGIN {
 
 my $client;
 eval {
-	$client = Client->new(config => "$script_path/config.json");
+	$client = Client->new(config => "$script_path/test_config.json");
 	$client->{ua} = $Mock_ua;
 };
 isa_ok($client, 'Client');
