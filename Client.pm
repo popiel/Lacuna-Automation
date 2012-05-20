@@ -323,6 +323,9 @@ sub body_buildable {
   if ($body->{incoming_foreign_ships}) {
     push(@completions, map { parse_time($_->{date_arrives}) } @{$body->{incoming_foreign_ships}});
   }
+  if ($body->{incoming_own_ships}) {
+    push(@completions, map { parse_time($_->{date_arrives}) } @{$body->{incoming_own_ships}});
+  }
   my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
   $self->cache_write( type => 'buildable', id => $body_id, invalid => $invalid, data => $result );
   return $result;
@@ -372,6 +375,7 @@ sub building_build {
   if ( $result ) {
     # invalidate the buildings cache
     $self->cache_invalidate( type => 'buildings', id => $body_id );
+    $self->cache_invalidate( type => 'plans',     id => $body_id );
 
     # invalidate building caches if we upgrade oversight ministry or ore refinery
     if ( $url =~ /oversite|orerefinery/ ) {
@@ -404,6 +408,7 @@ sub building_upgrade {
   if ( my $result = eval { $self->call($url => upgrade => $building_id); } ) {
       $self->cache_invalidate( type => 'building_view', id => $building_id                );
       $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'plans',         id => $result->{status}{body}{id} );
       $self->cache_invalidate( type => 'buildable',     id => $result->{status}{body}{id} ) if $url =~ /oversight|orerefinery|intelligence|university/;
 
       # invalidate the buildings cache
@@ -451,6 +456,7 @@ sub halls_sacrifice {
   my $result = eval { $self->call(hallsofvrbansk => sacrifice_to_upgrade => $hall_id, $building_id); };
   $self->cache_invalidate( type => 'building_view', id => $building_id                );
   $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
+  $self->cache_invalidate( type => 'plans',         id => $result->{status}{body}{id} );
   return $result;
 }
 
@@ -522,6 +528,29 @@ sub find_building {
     LacunaRPCException->throw(code => 1002, text => "$name not found",
                               data => JSON::PP->new->allow_nonref->canonical->pretty->encode({body_id => $where, name => $name, level => $level}));
   }
+}
+
+sub body_plans {
+  my $self = shift;
+  my $body_id = shift;
+
+  my $result = $self->cache_read( type => 'plans', id => $body_id );
+  return $result if $result;
+
+  $result = eval { $self->call(trade            => get_plan_summary => scalar($self->find_building($body_id, "Trade Ministry"))->{id}) } ||
+            eval { $self->call(transporter      => get_plan_summary => scalar($self->find_building($body_id, "Subspace Transporter"))->{id}) } ||
+            eval { $self->call(planetarycommand => view_plans       => scalar($self->find_building($body_id, "Planetary Command Center"))->{id}) };
+;
+  my @arrivals;
+  for my $type (qw(incoming_own_ships incoming_enemy_ships incoming_ally_ships incoming_foreign_ships)) {
+    next unless $result->{status}{body}{$type};
+    for my $ship (@{$result->{status}{body}{$type}}) {
+      push(@arrivals, parse_time($ship->{date_arrives}));
+    }
+  }
+  my $invalid = List::Util::min(time() + 3600, @arrivals);
+  $self->cache_write( type => 'plans', id => $body_id, data => $result, invalid => $invalid );
+  return $result;
 }
 
 sub park_party {
@@ -772,6 +801,11 @@ sub trade_push {
     $self->cache_invalidate( type => 'body_status', id => $target_id );
     $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $target_id );
     $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
+    if (grep { $_->{type} eq "plan" } @$items) {
+      $self->cache_invalidate( type => 'plans', id => $target_id );
+      $self->cache_invalidate( type => 'plans', id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'buildable', id => $result->{status}{body}{id} );
+    }
   }
   return $result;
 }
@@ -785,8 +819,15 @@ sub transporter_push {
   my $result = $self->call(transporter => push_items => $building_id, $target_id, $items);
   if ($result) {
     $self->cache_invalidate( type => 'body_status', id => $target_id );
-    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $target_id );
-    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
+    if (grep { $_->{type} eq "ship" } @$items) {
+      $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $target_id );
+      $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
+    }
+    if (grep { $_->{type} eq "plan" } @$items) {
+      $self->cache_invalidate( type => 'plans', id => $target_id );
+      $self->cache_invalidate( type => 'plans', id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'buildable', id => $result->{status}{body}{id} );
+    }
   }
   return $result;
 }
@@ -798,7 +839,7 @@ sub depot_transmit {
 
   my $result = $self->call(subspacesupplydepot => "transmit_$type" => $building_id);
   if ($result) {
-    $self->cache_invalidate( type => 'body_buildable', id => $building_id );
+    $self->cache_invalidate( type => 'buildable', id => $result->{status}{body}{id} );
   }
   return $result;
 }
@@ -944,6 +985,7 @@ sub present_captcha {
         buildings                    => 'body/%d/buildings',
         buildable                    => 'body/%d/buildable',
         spy_list                     => 'body/%d/spy_list',
+        plans                        => 'body/%d/plans',
         building_view                => 'building/%d/view',
         building_stats               => 'building/%d/stats_%d',
         spaceport_view_all_ships     => 'body/%d/view_all_ships',

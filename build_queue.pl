@@ -278,22 +278,25 @@ for (my $j = $[; $j <= $#queue; $j++) {
     next if @builds;
 
     my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
-    my @halls = grep { $_->{name} eq "Halls of Vrbansk" } @buildings;
     my $target = (grep { $_->{name} eq $name && (!$level || $_->{level} == $level) } @buildings)[0];
     if ($target) {
-      if (@halls <= $target->{level}) {
-        if ($queue[$j-1] !~ /-?build Halls of Vrbansk/) {
-          splice(@queue, $j, 0, "build Halls of Vrbansk\n") for (@halls..$target->{level});
-          write_queue();
-          $j--;
-          next;
-        }
-        emit("Insufficient halls to upgrade $name: have ".scalar(@halls).", need ".($target->{level}+1)) unless $quiet && $sleepy;
+      my @halls = grep { $_->{name} eq "Halls of Vrbansk" } @buildings;
+      my $plans = eval { first { $_->{name} eq "Halls of Vrbansk" } @{$client->body_plans($body_id)->{plans}} }
+                  || { quantity => 0 };
+      my $combo = @halls + $plans->{quantity};
+      if ($combo <= $target->{level}) {
+        emit("Insufficient halls to upgrade $name: have $combo, need ".($target->{level}+1)) unless $quiet && $sleepy;
         if ($queue[$j] !~ /^\-/) {
           splice(@queue, $j, 1, "-$queue[$j]");
           write_queue();
         }
         next;
+      }
+      if (!@halls) {
+        emit("Building Halls of Vrbansk, waiting 16 seconds");
+        my $result = $client->body_build($body_id, "Halls of Vrbansk");
+        push(@halls, $result->{building});
+        sleep(16);
       }
       emit("Sacrificing ".($target->{level}+1)." halls to upgrade $name");
       $client->halls_sacrifice($halls[0]{id}, $target->{id});
