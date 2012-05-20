@@ -72,20 +72,17 @@ eval {
       die "No matching planet for name $body_name\n" unless $body_id;
 
       # get archaeology
-      warn "Getting body buildings for $planets->{$body_id}\n" if $debug;
-      my $buildings = $client->body_buildings($body_id);
-      my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
-
-      my $arch_id = (grep($_->{name} eq "Archaeology Ministry", @buildings))[0]{id};
-      unless ($arch_id) {
+      my $arch = eval { $client->find_building($body_id, "Archaeology Ministry"); };
+      unless ($arch) {
         warn "No Archaeology Ministry on $planets->{$body_id}\n";
         next;
       }
-      warn "Using Archaeology Ministry id $arch_id\n" if $debug;
+      warn "Using Archaeology Ministry id $arch->{id}\n" if $debug;
 
       warn "Getting glyphs on $planets->{$body_id}\n" if $debug;
-      my $glyphs = $client->call(archaeology => get_glyphs => $arch_id);
-      unless ($glyphs->{glyphs}) {
+      my $summary = $client->call(archaeology => get_glyph_summary => $arch->{id});
+      my %glyphs = map { $_->{name}, $_->{quantity} } @{$summary->{glyphs}};
+      unless (%glyphs) {
         warn "No glyphs on $planets->{$body_id}\n";
         next;
       }
@@ -98,18 +95,13 @@ eval {
         [ qw(rutile chromite chalcopyrite galena) ],
       );
 
-      my %glyphs = map { ($_, []) } map { @$_ } @recipes;
-      for my $glyph (@{$glyphs->{glyphs}}) {
-        push(@{$glyphs{$glyph->{type}}}, $glyph->{id});
-      }
-
       my %extra;
       my %possible;
       for my $recipe (@recipes) {
-        my $min = List::Util::max(0, -$reserve + List::Util::min(map { scalar(@{$glyphs{$_}}) } @$recipe));
+        my $min = List::Util::max(0, -$reserve + List::Util::min(map { $glyphs{$_} } @$recipe));
         $possible{$recipe} = $min;
         for my $glyph (@$recipe) {
-          $extra{$glyph} = @{$glyphs{$glyph}} - $min;
+          $extra{$glyph} = $glyphs{$glyph} - $min;
         }
       }
 
@@ -126,32 +118,34 @@ eval {
       }
 
       for my $recipe (@recipes) {
-        while ($possible{$recipe}--) {
-          my @ids;
-          for my $glyph (@$recipe) {
-            push(@ids, pop(@{$glyphs{$glyph}}));
+        while ($possible{$recipe}) {
+          my $count = List::Util::min(50, $possible{$recipe});
+          print "Making $count halls with ".join(", ", @$recipe)."\n";
+          $possible{$recipe} -= $count;
+          my $result = eval { $client->call(archaeology => assemble_glyphs => $arch->{id}, $recipe, $count); };
+          if ($result->{item_name} eq "Halls of Vrbansk") {
+            $made{$body_id} += $count;
+          } else {
+            print "Failed to make hall!\n";
           }
-          print "Making hall with ".join(", ", @$recipe).": ".join(", ", @ids)."\n";
-          my $result = $client->call(archaeology => assemble_glyphs => $arch_id, [ @ids ]);
-          print "Failed to make hall!\n" if $result->{item_name} ne "Halls of Vrbansk";
-          $made{$body_id}++;
         }
       }
 
       if ($for_id && $made{$body_id}) {
-        my $trade_id = (grep($_->{name} eq "Trade Ministry", @buildings))[0]{id};
-        unless ($trade_id) {
+        
+        my $trade = eval { $client->find_building($body_id, "Trade Ministry"); };
+        unless ($trade) {
           warn "No Trade Ministry on $planets->{$body_id}\n";
           next;
         }
-        warn "Using Trade Ministry id $trade_id\n" if $debug;
+        warn "Using Trade Ministry id $trade->{id}\n" if $debug;
 
-        my $plans = $client->call(trade => get_plans => $trade_id);
+        my $plans = $client->call(trade => get_plans => $trade->{id});
         my $psize = $plans->{cargo_space_used_each};
         my @plans = grep { $_->{name} eq "Halls of Vrbansk" } @{$plans->{plans}};
         $#plans = $made{$body_id} - 1 if @plans > $made{$body_id};
 
-        my @ships = @{$client->call(trade => get_trade_ships => $trade_id, $for_id)->{ships}};
+        my @ships = @{$client->call(trade => get_trade_ships => $trade->{id}, $for_id)->{ships}};
         # Avoid ships already allocated to trade routes
         @ships = grep { $_->{name} !~ /(Alpha|Beta|Gamma|Delta)$/ } @ships;
 
@@ -176,7 +170,7 @@ eval {
           my @items;
           push(@items, { type => "plan", plan_id => (shift(@plans))->{id} }) while @plans && @items < $ship->{plan_count};
           print "Pushing ".scalar(@items)." halls to $for_name on $ship->{name}.\n";
-          $client->trade_push($trade_id, $for_id, \@items, { ship_id => $ship->{id}, stay => 0 });
+          $client->trade_push($trade->{id}, $for_id, \@items, { ship_id => $ship->{id}, stay => 0 });
         }
       }
     }
