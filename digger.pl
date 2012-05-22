@@ -53,10 +53,12 @@ exit(0) unless grep { !($_->{work}{end}) || Client::parse_time($_->{work}{end}) 
 
 my %glyphs;
 for my $body_id (@body_ids) {
-  my $glyphs = $client->get_glyphs($arches{$body_id}{id});
-  for my $glyph (@{$glyphs->{glyphs}}) {
-    $glyphs{$glyph->{type}}++;
+  my $summary = eval { $client->glyph_list($body_id) };
+  if (!$summary) {
+    warn "Couldn't get glyphs on $planets->{$body_id}: $@\n";
+    next;
   }
+  $glyphs{$_->{name}} += $_->{quantity} for @{$summary->{glyphs}};
 }
 
 my @recipes = (

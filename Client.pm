@@ -537,10 +537,12 @@ sub body_plans {
   my $result = $self->cache_read( type => 'plans', id => $body_id );
   return $result if $result;
 
-  $result = eval { $self->call(trade            => get_plan_summary => scalar($self->find_building($body_id, "Trade Ministry"))->{id}) } ||
-            eval { $self->call(transporter      => get_plan_summary => scalar($self->find_building($body_id, "Subspace Transporter"))->{id}) } ||
-            eval { $self->call(planetarycommand => view_plans       => scalar($self->find_building($body_id, "Planetary Command Center"))->{id}) };
-;
+  # Trade and transporter are preferred because of the inclusion of cargo size and plan_type
+  # The last one is not in an eval so that fundamental exceptions (e.g. login failure) propagate
+  $result = eval { $self->call(trade            => get_plan_summary => scalar($self->find_building($body_id, "Trade Ministry"          ))->{id}) } ||
+            eval { $self->call(transporter      => get_plan_summary => scalar($self->find_building($body_id, "Subspace Transporter"    ))->{id}) } ||
+                   $self->call(planetarycommand => view_plans       => scalar($self->find_building($body_id, "Planetary Command Center"))->{id});
+
   my @arrivals;
   for my $type (qw(incoming_own_ships incoming_enemy_ships incoming_ally_ships incoming_foreign_ships)) {
     next unless $result->{status}{body}{$type};
@@ -550,6 +552,46 @@ sub body_plans {
   }
   my $invalid = List::Util::min(time() + 3600, @arrivals);
   $self->cache_write( type => 'plans', id => $body_id, data => $result, invalid => $invalid );
+  return $result;
+}
+
+sub glyph_list {
+  my $self = shift;
+  my $body_id = shift;
+
+  my $result = $self->cache_read( type => 'glyphs', id => $body_id );
+  return $result if $result;
+
+  # Trade and transporter are preferred because of the inclusion of cargo size
+  # The last one is not in an eval so that fundamental exceptions (e.g. login failure) propagate
+  $result = eval { $self->call(trade       => get_glyph_summary => scalar($self->find_building($body_id, "Trade Ministry"      ))->{id}) } ||
+            eval { $self->call(transporter => get_glyph_summary => scalar($self->find_building($body_id, "Subspace Transporter"))->{id}) } ||
+                   $self->call(archaeology => get_glyph_summary => scalar($self->find_building($body_id, "Archaeology Ministry"))->{id});
+
+  my @arrivals;
+  for my $type (qw(incoming_own_ships incoming_enemy_ships incoming_ally_ships incoming_foreign_ships)) {
+    next unless $result->{status}{body}{$type};
+    for my $ship (@{$result->{status}{body}{$type}}) {
+      push(@arrivals, parse_time($ship->{date_arrives}));
+    }
+  }
+  my $invalid = List::Util::min(time() + 3600, @arrivals);
+  $self->cache_write( type => 'glyphs', id => $body_id, data => $result, invalid => $invalid );
+  return $result;
+}
+
+sub glyph_assemble {
+  my $self = shift;
+  my $body_id = shift;
+  my $recipe = shift;
+  my $count = @_ ? shift : 1;
+
+  my $arch = $self->find_building($body_id, "Archaeology Ministry");
+  my $result = $self->call(archaeology => assemble_glyphs => $arch->{id}, $recipe, $count);
+  if ($result) {
+    $self->cache_invalidate( type => 'plans',  id => $result->{status}{body}{id} );
+    $self->cache_invalidate( type => 'glyphs', id => $result->{status}{body}{id} );
+  }
   return $result;
 }
 
@@ -604,6 +646,7 @@ sub archaeology_search {
   if ( $result ) {
       $self->cache_invalidate( type => 'buildings',     id => $result->{status}{body}{id} );
       $self->cache_invalidate( type => 'building_view', id => $building_id );
+      $self->cache_invalidate( type => 'glyphs',        id => $result->{status}{body}{id} );
   }
   return $result;
 }
@@ -986,6 +1029,7 @@ sub present_captcha {
         buildable                    => 'body/%d/buildable',
         spy_list                     => 'body/%d/spy_list',
         plans                        => 'body/%d/plans',
+        glyphs                       => 'body/%d/glyphs',
         building_view                => 'building/%d/view',
         building_stats               => 'building/%d/stats_%d',
         spaceport_view_all_ships     => 'body/%d/view_all_ships',

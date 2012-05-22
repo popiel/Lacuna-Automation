@@ -71,16 +71,12 @@ eval {
       exit(1) if $quiet && !$body_id;
       die "No matching planet for name $body_name\n" unless $body_id;
 
-      # get archaeology
-      my $arch = eval { $client->find_building($body_id, "Archaeology Ministry"); };
-      unless ($arch) {
-        warn "No Archaeology Ministry on $planets->{$body_id}\n";
+      warn "Getting glyphs on $planets->{$body_id}\n" if $debug;
+      my $summary = eval { $client->glyph_list($body_id) };
+      if (!$summary) {
+        warn "Couldn't get glyphs on $planets->{$body_id}: $@\n";
         next;
       }
-      warn "Using Archaeology Ministry id $arch->{id}\n" if $debug;
-
-      warn "Getting glyphs on $planets->{$body_id}\n" if $debug;
-      my $summary = $client->call(archaeology => get_glyph_summary => $arch->{id});
       my %glyphs = map { $_->{name}, $_->{quantity} } @{$summary->{glyphs}};
       unless (%glyphs) {
         warn "No glyphs on $planets->{$body_id}\n";
@@ -122,8 +118,10 @@ eval {
           my $count = List::Util::min(50, $possible{$recipe});
           print "Making $count halls with ".join(", ", @$recipe)."\n";
           $possible{$recipe} -= $count;
-          my $result = eval { $client->call(archaeology => assemble_glyphs => $arch->{id}, $recipe, $count); };
-          if ($result->{item_name} eq "Halls of Vrbansk") {
+          my $result = eval { $client->glyph_assemble($body_id, $recipe, $count); };
+          if (!$result) {
+            warn "Couldn't assemble glyphs on $planets->{$body_id}: $@\n";
+          } elsif ($result->{item_name} eq "Halls of Vrbansk") {
             $made{$body_id} += $count;
           } else {
             print "Failed to make hall!\n";
@@ -132,7 +130,6 @@ eval {
       }
 
       if ($for_id && $made{$body_id}) {
-        
         my $trade = eval { $client->find_building($body_id, "Trade Ministry"); };
         unless ($trade) {
           warn "No Trade Ministry on $planets->{$body_id}\n";
