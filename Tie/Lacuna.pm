@@ -7,6 +7,34 @@ use Data::Dumper;
 
 our @ISA = 'Tie::Hash';
 
+=pod
+
+=head1 Description
+
+A hash-like interface for Lacuna data access.
+Relies heavily on Client.pm's caching layer.
+
+=head1 Usage
+
+my $lacuna = Tie::Lacuna::get_tie();
+
+# get empire id
+my $empire_id = $lacuna->{'empire'}->{id};
+
+#get planet status by id
+my $planet_status = $lacuna->{'planets'}->{$planet_id}->{status};
+$ or name
+my $planet_status = $lacuna->{'planets'}->{'Planet name here'}->{status};
+
+#get hashref of buildings on a planet (keyed by id)
+my $buildings = $lacuna->{planets}->{'Planet name here'}->{buildings};
+
+# list of ships on a planet
+my @ships = $lacuna->{planets}->{'Planet name here'}->{ships};
+
+=cut
+
+
 {
 	#$lacuna->{planets}->{'foo'}->{ships}
 	#$lacuna->{planets}->{'foo'}->{buildings}
@@ -16,7 +44,7 @@ our @ISA = 'Tie::Hash';
 			'planets' => '_get_planets', 
 		}, 
 		'planet' => { 
-			(map { $_ => '_get_planet' } qw( status buildings body )),
+			(map { $_ => '_get_planet' } qw( status buildings body name )),
 			'ships' => '_get_ships',
 		},
 	};
@@ -79,7 +107,7 @@ sub _get_planets {
 	my $planets_by_id = $client->empire_status()->{'planets'};
 	my $planets_by_name = {
 		map {
-			my $planet = get_tie($client, 'planet', { 'id' => $_ });
+			my $planet = get_tie($client, 'planet', { 'id' => $_, 'name' => $planets_by_id->{$_} });
 			( 
 				$planets_by_id->{$_} => $planet,
 				$_ => $planet

@@ -32,7 +32,8 @@ isa_ok($lacuna->{planets}, 'HASH', 'autofetch $lacuna->{planets}');
 my $planet_name = [keys %{ $lacuna->{planets} }]->[0];
 my $planet = $lacuna->{planets}->{ $planet_name };
 diag("Using planet: $planet_name ($planet->{id})");
-is_deeply([sort keys %$planet], [ qw( body buildings id ships status ) ], 'planet has the right keys');
+is_deeply([sort keys %$planet], [ qw( body buildings id name ships status ) ], 'planet has the right keys');
+is($planet->{name}, $planet_name, 'planet name is populated');
 
 my $buildings = $planet->{'buildings'};
 isa_ok($buildings, 'HASH', 'autofetch $lacuna->{planets}->{"'.$planet_name.'"}->{buildings}');
@@ -42,7 +43,7 @@ is_deeply($lacuna->{planets}->{$planet->{id}}->{buildings}, $buildings, 'autofet
 
 my $ships = $planet->{ships};
 isa_ok($ships, 'ARRAY', 'autofetch $lacuna->{empire}->{"The Beginning"}->{ships}');
+diag(Dumper($ships));
 
-
-done_testing(13);
+done_testing(14);
 

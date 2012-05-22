@@ -3,6 +3,58 @@ package Client::TaskRunner;
 use Moose;
 use List::Util qw( min max first );
 
+=pod
+
+=head1 Description
+
+A demultiplexer for the Lacuna Client. Set up Client::Tasks with schedules.
+  - All work shares the same Client object and cache
+  - No possibility of multiple scripts stepping on your rpc rate limit
+  - Just-in-time scheduling of work
+
+=head1 Usage
+
+$client = Client->new(config => $ARGV[0]);
+$runner = Client::TaskRunner->new('client' => $client);
+
+# set up a simple periodic task to check for a specific email then stop
+$runner->add_task(Client::Task->new(
+	'repeat_after' => 30, # seconds
+	'callback' => sub {
+		my ($self, $runner) = @_;
+		my $client = $runner->client();
+		... check email ... 
+		if $email =~ /I accept your terms/ {
+			$self->stop_repeating();
+		} else {
+			... build more snarks ...
+		}
+	}
+));
+
+# set up a cron-scheduled task that creates new one-off tasks that run at exactly the right time.
+# in this case, maybe we want to automatically ship spies to another planet to post them on the merc guild
+$auto_spy_auction = Client::Task->new(
+	'cron_spec' => DateTime::Event::Cron->new('0 * * * *'),
+	'callback' => sub {
+		my ($self, $runner) = @_;
+		... for empty IntMin slots ... {
+			... train spy, get spy id, calculate time until training finishes ...
+			$runner->add_task(Client::Task->new('next_run' => $training_time, 'callback' => sub { 
+				my ($self, $runner) = @_;
+				... ship spy to your merc guild planet, get time until arrival ...
+				$runner->add_task(Client::Task->new( 'next_run' => $arrival_time, 'callback' => sub { ... put spy up for auction ... } ));
+			}));
+		}
+	}
+);
+$runner->add_task($auto_spy_auction);
+
+# run all tasks on schedule until we don't have any more to run
+$runner->run();
+
+=cut
+
 has 'client' => (
 	is => 'ro',
 	isa => 'Client', # Lacuna client, that is
