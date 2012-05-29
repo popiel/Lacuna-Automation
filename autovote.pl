@@ -48,7 +48,7 @@ for my $body_id (keys(%$planets)) {
 }
 
 my @trash;
-my $inbox = $client->call(inbox => 'view_inbox');
+my $inbox = $client->mail_inbox();
 emit("inbox result: ".encode_json($inbox)) if $debug;
 for my $message (@{$inbox->{messages}}) {
   emit("Inspecting message tag '@{$message->{tags}}'; subject '$message->{subject}'") if $debug;
@@ -60,7 +60,7 @@ for my $message (@{$inbox->{messages}}) {
   }
 }
 if (@trash) {
-  my $result = $client->call(inbox => trash_messages => \@trash);
+  my $result = $client->mail_trash(\@trash);
   emit("trash result: ".encode_json($result)) if $debug;
   my $count = @{$result->{success}};
   emit("Trashed $count inbox messages.");

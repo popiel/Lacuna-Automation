@@ -207,6 +207,13 @@ sub call {
   my $empire = $result->{result}{status}{empire};
   if ($empire) {
     $self->cache_write( type => 'empire_status', data => $empire );
+    eval {
+      if ($empire->{most_recent_message}{id} &&
+          $empire->{most_recent_message}{id} ne $self->cache_read( type => 'mail_inbox' )->{messages}[0]{id}) {
+        # print "Invalidating mailbox: new $empire->{most_recent_message}{id} ne cached ".($self->cache_read( type => 'mail_inbox' )->{messages}[0]{id})."\n";
+        $self->cache_invalidate( type => 'mail_inbox' );
+      }
+    };
   }
   my $body = $result->{result}{status}{body};
   if ($body) {
@@ -982,6 +989,45 @@ sub spy_retrain {
   return $result;
 }
 
+# This will only cache the first page of mail.
+# That's usually enough for non-interactive use;
+# automated processes should be running frequently enough
+# to only be interested in recent messages.
+sub mail_inbox {
+  my $self = shift;
+  my $options = shift || {};
+  my $result;
+  if (!keys(%$options)) {
+    $result = $self->cache_read( type => 'mail_inbox' );
+    return $result if $result;
+  }
+  $result = $self->call( inbox => view_inbox => $options );
+  if (!keys(%$options)) {
+    $self->cache_write( type => 'mail_inbox', data => $result );
+  }
+  return $result;
+}
+
+sub mail_message {
+  my $self = shift;
+  my $message_id = shift;
+
+  my $result = $self->cache_read( type => 'mail_message', id => $message_id );
+  return $result if $result;
+  $result = $self->call( inbox => read_message => $message_id);
+  $self->cache_write( type => 'mail_message', id => $message_id, data => $result );
+  return $result;
+}
+
+sub mail_trash {
+  my $self = shift;
+  my $message_ids = shift;
+
+  my $result = $self->call( inbox => trash_messages => $message_ids);
+  $self->cache_invalidate( type => 'mail_inbox' );
+  return $result;
+}
+
 sub present_captcha {
   my ($self, $captcha) = @_;
   $captcha ||= $self->call(captcha => "fetch");
@@ -1036,6 +1082,8 @@ sub present_captcha {
         observatory_get_probed_stars => 'building/%d/get_probed_stars',
         shipyard_view_build_queue    => 'building/%d/view_build_queue',
         mission_list                 => 'building/%d/mission_list',
+        mail_inbox                   => 'mail/inbox',
+        mail_message                 => 'mail/message/%d',
         session                      => 'session',
         misc                         => 'misc/%s',
     );
