@@ -71,7 +71,8 @@ my @recipes = (
 
 my %bias;
 for my $recipe (@recipes) {
-  my $average = sum(map { $glyphs{$_} } @$recipe) / @$recipe;
+  my @sorted = sort { $a <=> $b } map { $glyphs{$_} || 0 } @$recipe;
+  my $average = ($sorted[0] + $sorted[1]) / 2;
   for my $ore (@$recipe) {
     $bias{$ore} = $glyphs{$ore} - $average;
   }
@@ -91,26 +92,41 @@ for my $body_id (@body_ids) {
     next;
   }
   my $embassy = eval { $client->find_building($body_id, "Embassy"); };
-  next unless $embassy;
+  if (!$embassy) {
+    emit("Build an embassy to search for more important glyphs", $body_id);
+  } else {
+    my $result = $client->call(embassy => view_stash => $embassy->{id});
+    if (!($result->{exchanges_remaining_today} && $result->{max_exchange_size} >= 10000)) {
+      emit("Upgrade your embassy to search for more important glyphs", $body_id);
+    } else {
+      my %stored = %{$result->{stored}};
+      my %stash  = %{$result->{stash}};
 
-  my $result = $client->call(embassy => view_stash => $embassy->{id});
-  next unless $result->{exchanges_remaining_today} && $result->{max_exchange_size} >= 10000;
-  my %stored = %{$result->{stored}};
-  my %stash  = %{$result->{stash}};
-
-  @ores = sort { $bias{$a} <=> $bias{$b} } keys %bias;
-  @ores = grep { $stash{$_} >= 10000 && $bias{$_} < 0 } @ores;
-  next unless @ores;
-
-  my %wanted = ( $ores[0] => 10000 );
-  my %extra = map { $_, $stored{$_} } keys %bias;
-  delete $extra{$ores[0]};
-  my %giving = $client->select_exchange(\%stash, \%extra, \%wanted);
-  emit("Exchanging ". join(", ", map { "$giving{$_} $_" } keys(%giving)). " for ". join(", ", map { "$wanted{$_} $_" } keys(%wanted)));
-  $noaction or eval { $client->call(embassy => exchange_with_stash => $embassy->{id}, { %giving }, { %wanted }); };
-  emit("Searching for $ores[0] glyph (bias $bias{$ores[0]})", $body_id);
-  $noaction or eval { $client->archaeology_search($arches{$body_id}{id}, $ores[0]); };
-  $bias{$ores[0]}++;
+      @ores = sort { $bias{$a} <=> $bias{$b} } keys %bias;
+      @ores = grep { $stash{$_} >= 10000 && $bias{$_} <= 0 } @ores;
+      if (!@ores) {
+        emit("Restock your embassy to search for more important glyphs", $body_id);
+      } else {
+        my %wanted = ( $ores[0] => 10000 );
+        my %extra = map { $_, $stored{$_} } keys %bias;
+        delete $extra{$ores[0]};
+        my %giving = $client->select_exchange(\%stash, \%extra, \%wanted);
+        emit("Exchanging ". join(", ", map { "$giving{$_} $_" } keys(%giving)). " for ". join(", ", map { "$wanted{$_} $_" } keys(%wanted)));
+        $noaction or eval { $client->call(embassy => exchange_with_stash => $embassy->{id}, { %giving }, { %wanted }); };
+        emit("Searching for $ores[0] glyph (bias $bias{$ores[0]})", $body_id);
+        $noaction or eval { $client->archaeology_search($arches{$body_id}{id}, $ores[0]); };
+        $bias{$ores[0]}++;
+        next;
+      }
+    }
+  }
+  my @ores = sort { $bias{$a} <=> $bias{$b} } keys (%{$ores->{ore}});
+  if (@ores) {
+    emit("Searching for $ores[0] glyph (bias $bias{$ores[0]})", $body_id);
+    $noaction or $client->archaeology_search($arches{$body_id}{id}, $ores[0]);
+    $bias{$ores[0]}++;
+    next;
+  }
 }
 
 sub emit {
