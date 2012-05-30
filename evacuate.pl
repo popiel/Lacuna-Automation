@@ -89,7 +89,7 @@ my $plans;
 my $glyphs;
 
 if ($do_plans || $do_tyleon || $do_sculpture) {
-  $plans  = $client->call(trade => get_plans  => $trade[0]{id});
+  $plans  = $client->body_plans($body_id[0]);
   @plans = @{$plans->{plans}};
   @plans = grep { $_->{name} ne "Halls of Vrbansk" } @plans;
   @plans = grep { $_->{name} !~ /Tyleon/ } @plans unless $do_tyleon;
@@ -98,7 +98,7 @@ if ($do_plans || $do_tyleon || $do_sculpture) {
 }
 
 if ($do_glyphs) {
-  $glyphs = $client->call(trade => get_glyphs => $trade[0]{id});
+  $glyphs = $client->glyph_list($body_id[0]);
   @glyphs = @{$glyphs->{glyphs}};
 }
 
@@ -113,16 +113,24 @@ for my $ship (@ships) {
   my $pc = 0;
   my $gc = 0;
   while (@plans && $space > $plans->{cargo_space_used_each}) {
-    my $plan = shift @plans;
-    push(@items, { type => "plan", plan_id => $plan->{id} });
-    $space -= $plans->{cargo_space_used_each};
-    $pc++;
+    my $max = int($space / $plans->{cargo_space_used_each});
+    my $plan = $plans[0];
+    my $count = List::Util::min($max, $plan->{quantity});
+    push(@items, { type => "plan", %$plan, quantity => $count });
+    $space -= $count * $plans->{cargo_space_used_each};
+    $pc += $count;
+    $plan->{quantity} -= $count;
+    shift @plans unless $plan->{quantity};
   }
   while (@glyphs && $space > $glyphs->{cargo_space_used_each}) {
-    my $glyph = shift @glyphs;
-    push(@items, { type => "glyph", glyph_id => $glyph->{id} });
-    $space -= $glyphs->{cargo_space_used_each};
-    $gc++;
+    my $max = int($space / $glyphs->{cargo_space_used_each});
+    my $glyph = $glyphs[0];
+    my $count = List::Util::min($max, $glyph->{quantity});
+    push(@items, { type => "glyph", name => $glyph->{name}, quantity => $count });
+    $space -= $count * $glyphs->{cargo_space_used_each};
+    $gc += $count;
+    $glyph->{quantity} -= $count;
+    shift @glyphs unless $glyph->{quantity};
   }
   if (@items) {
     emit("Sending $pc plans and $gc glyphs to $planets->{$body_id[1]} on $ship->{name}", $planets->{$body_id[0]});

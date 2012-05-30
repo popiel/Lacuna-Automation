@@ -856,6 +856,10 @@ sub trade_push {
       $self->cache_invalidate( type => 'plans', id => $result->{status}{body}{id} );
       $self->cache_invalidate( type => 'buildable', id => $result->{status}{body}{id} );
     }
+    if (grep { $_->{type} eq "glyph" } @$items) {
+      $self->cache_invalidate( type => 'glyphs', id => $target_id );
+      $self->cache_invalidate( type => 'glyphs', id => $result->{status}{body}{id} );
+    }
   }
   return $result;
 }
@@ -877,6 +881,10 @@ sub transporter_push {
       $self->cache_invalidate( type => 'plans', id => $target_id );
       $self->cache_invalidate( type => 'plans', id => $result->{status}{body}{id} );
       $self->cache_invalidate( type => 'buildable', id => $result->{status}{body}{id} );
+    }
+    if (grep { $_->{type} eq "glyph" } @$items) {
+      $self->cache_invalidate( type => 'glyphs', id => $target_id );
+      $self->cache_invalidate( type => 'glyphs', id => $result->{status}{body}{id} );
     }
   }
   return $result;
