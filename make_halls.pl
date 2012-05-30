@@ -137,10 +137,9 @@ eval {
         }
         warn "Using Trade Ministry id $trade->{id}\n" if $debug;
 
-        my $plans = $client->call(trade => get_plans => $trade->{id});
+        my $plans = $client->body_plans($body_id);
         my $psize = $plans->{cargo_space_used_each};
         my @plans = grep { $_->{name} eq "Halls of Vrbansk" } @{$plans->{plans}};
-        $#plans = $made{$body_id} - 1 if @plans > $made{$body_id};
 
         my @ships = @{$client->call(trade => get_trade_ships => $trade->{id}, $for_id)->{ships}};
         # Avoid ships already allocated to trade routes
@@ -163,11 +162,19 @@ eval {
         $move_count += $ships[++$top]{plan_count} while $top < $#ships && $move_count < $made{$body_id};
         $#ships = $top;
 
+        $move_count = $made{$body_id} if $move_count > $made{$body_id};
+
         for my $ship (@ships) {
-          my @items;
-          push(@items, { type => "plan", plan_id => (shift(@plans))->{id} }) while @plans && @items < $ship->{plan_count};
-          print "Pushing ".scalar(@items)." halls to $for_name on $ship->{name}.\n";
-          $client->trade_push($trade->{id}, $for_id, \@items, { ship_id => $ship->{id}, stay => 0 });
+          my $move = List::Util::min($move_count, $ship->{plan_count});
+          $move_count -= $move;
+          print "Pushing $move halls to $for_name on $ship->{name}.\n";
+          $client->trade_push($trade->{id}, $for_id, [{
+            type => "plan",
+            plan_type => $plans[0]{plan_type},
+            level => 1,
+            extra_build_level => 0,
+            quantity => $move,
+          }], { ship_id => $ship->{id}, stay => 0 });
         }
       }
     }
