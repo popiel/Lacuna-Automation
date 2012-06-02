@@ -208,8 +208,8 @@ sub call {
   if ($empire) {
     $self->cache_write( type => 'empire_status', data => $empire );
     eval {
-      if ($empire->{most_recent_message}{id} &&
-          $empire->{most_recent_message}{id} ne $self->cache_read( type => 'mail_inbox' )->{messages}[0]{id}) {
+      my $message_id = $empire->{latest_message_id} || eval { $empire->{most_recent_message}{id} };
+      if ($message_id && $message_id ne $self->cache_read( type => 'mail_inbox' )->{messages}[0]{id}) {
         # print "Invalidating mailbox: new $empire->{most_recent_message}{id} ne cached ".($self->cache_read( type => 'mail_inbox' )->{messages}[0]{id})."\n";
         $self->cache_invalidate( type => 'mail_inbox' );
       }
@@ -684,7 +684,7 @@ sub port_all_ships {
     $body_id = $building_id;
     $building_id = $self->find_building($body_id, "Space Port")->{id};
   } else {
-    $body_id = $self->building_view(spaceport => $building_id)->{status}{body}{id};
+    $body_id = $self->building_stats_for_level(spaceport => $building_id, 1)->{status}{body}{id};
   }
 
   my $result = $self->cache_read( type => 'spaceport_view_all_ships', id => $body_id, stale => 3600 );
