@@ -318,7 +318,6 @@ sub body_buildable {
   my $result = $self->cache_read( type => 'buildable', id => $body_id );
   return $result if $result;
 
-  $result = $self->call(body => get_buildable => $body_id);
   my $buildings = $self->body_buildings($body_id);
   my @completions;
   for my $building (values(%{$buildings->{buildings}})) {
@@ -333,6 +332,21 @@ sub body_buildable {
   if ($body->{incoming_own_ships}) {
     push(@completions, map { parse_time($_->{date_arrives}) } @{$body->{incoming_own_ships}});
   }
+
+  my %plots;
+  for my $building (values %{$buildings->{buildings}}) {
+    $plots{$building->{x},$building->{y}} = 1;
+  }
+  my @plots;
+  for my $x (-5 .. 5) {
+    for my $y (-5 .. 5) {
+      # next if $x >= 3 && $y >= 3;
+      push(@plots, [ $x, $y ]) unless $plots{$x,$y};
+    }
+  }
+  
+  $result = $self->call(body => get_buildable => $body_id, $plots[0][0], $plots[0][1]);
+
   my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
   $self->cache_write( type => 'buildable', id => $body_id, invalid => $invalid, data => $result );
   return $result;
