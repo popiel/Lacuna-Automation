@@ -64,6 +64,18 @@ for (;;) {
       emit("Trashing $message->{id}") if $debug;
       push(@trash, $message->{id});
     }
+    if (grep(/Excavator/, @{$message->{tags}}) &&
+        $message->{subject} =~ /Excavator Results/) {
+      my $detail = $client->call(inbox => read_message => $message->{id});
+      my @replacements = grep { $_->[1] eq "Replace" && $_->[2] !~ /^Fail/ } @{$detail->{message}{attachments}{table}};
+      if (@replacements) {
+        my $body_id = ($detail->{message}{body} =~ /\{Planet (\d+)/);
+        emit("Excavator replacement for ".join(", ", map { $_->[0] } @replacements)."; invalidating ship list.", $body_id);
+        $client->cache_invalidate( type => 'spaceport_view_all_ships', id => $body_id );
+      }
+      emit("Trashing $message->{id}") if $debug;
+      push(@trash, $message->{id});
+    }
   }
   last unless @trash;
 

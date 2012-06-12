@@ -21,15 +21,17 @@ my $debug = 0;
 my $quiet = 0;
 my $noaction = 0;
 my $do_waste = 1;
+my $use_chain = 0;
 
 GetOptions(
-  "config=s"    => \$config_name,
-  "body=s"      => \@body_names,
-  "ship|name=s" => \$ship_name,
-  "debug"       => \$debug,
-  "quiet"       => \$quiet,
-  "noaction!"   => \$noaction,
-  "waste!"      => \$do_waste,
+  "config=s"         => \$config_name,
+  "body=s"           => \@body_names,
+  "ship|name=s"      => \$ship_name,
+  "debug"            => \$debug,
+  "quiet"            => \$quiet,
+  "noaction!"        => \$noaction,
+  "waste!"           => \$do_waste,
+  "use_chain|chain!" => \$use_chain,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my @foods = qw(algae apple bean beetle bread burger
@@ -208,6 +210,14 @@ sub express_desires {
   }
 
   return %ideals;
+}
+
+sub find_best_chaining {
+  for my $resource (@resources) {
+    my @bodies = keys %vitals;
+    my %excess = map { $_, ($ideals{$_}{$resource} - $vitals{$_}{resources}{$resource}) } @bodies;
+#    for my $
+  }
 }
 
 sub find_best_shipping {

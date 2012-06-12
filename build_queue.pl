@@ -585,6 +585,11 @@ sub upgrade_check {
       if $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_};
   }
   return "Not enough ".join(", ", @message)." in storage to build this." if @message;
+  for (qw(food ore water energy)) {
+    push(@message, "$_ (".($status->{"${_}_hour"} - $building->{upgrade}{production}{"${_}_hour"} + $building->{"${_}_hour"})."/hour)")
+      if $status->{"${_}_hour"} < $building->{upgrade}{production}{"${_}_hour"} - $building->{"${_}_hour"};
+  }
+  return "Unsustainable. Not enough ".join(", ", @message)." production." if @message;
   my $view = $client->building_view($building->{url}, $building->{id})->{building};
   return $view->{upgrade}{reason}[1] unless $view->{upgrade}{can};
   return;

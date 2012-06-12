@@ -127,7 +127,7 @@ for my $body_id (@body_ids) {
   }
   @ores = sort keys %ores;
   my $port = $client->find_building($body_id, "Space Port");
-  my $ships = $client->port_all_ships($port->{id});
+  my $ships = $client->port_all_ships($body_id);
   my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
   my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
   for my $excavator (@travelling) {
@@ -169,7 +169,7 @@ if ($purge) {
     }
     @ores = sort keys %ores;
     my $port = $client->find_building($body_id, "Space Port");
-    my $ships = $client->port_all_ships($port->{id});
+    my $ships = $client->port_all_ships($body_id);
     my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
     my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
     for my $excavator (@travelling) {
@@ -341,7 +341,7 @@ for my $body_id (@body_ids) {
   next unless $delta > 0;
 
   my $port = $client->find_building($body_id, "Space Port");
-  my $ships = $client->port_all_ships($port->{id});
+  my $ships = $client->port_all_ships($body_id);
   my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
   my @ready = grep { $_->{task} eq "Docked" } @excavators;
 
