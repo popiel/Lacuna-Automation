@@ -581,7 +581,7 @@ sub upgrade_check {
       }
       $status = $client->body_status($body_id);
     }
-    push(@message, "$_ (".$status->{"${_}_stored"}."/".$building->{upgrade}{cost}{$_}.")")
+    push(@message, "$_ (".$status->{"${_}_stored"}."/".$building->{upgrade}{cost}{$_}.", ".duration(($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) * 3600 / $status->{"${_}_hour"}).")")
       if $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_};
   }
   return "Not enough ".join(", ", @message)." in storage to build this." if @message;
@@ -593,6 +593,18 @@ sub upgrade_check {
   my $view = $client->building_view($building->{url}, $building->{id})->{building};
   return $view->{upgrade}{reason}[1] unless $view->{upgrade}{can};
   return;
+}
+
+sub duration {
+  my $seconds = shift;
+
+  my $result = "";
+  if ($seconds >= 86400) { $result .= sprintf("%dd ", int($seconds / 86400)); $seconds = $seconds % 86400; }
+  if ($seconds >=  3600) { $result .= sprintf("%dh ", int($seconds /  3600)); $seconds = $seconds %  3600; }
+  if ($seconds >=    60) { $result .= sprintf("%dm ", int($seconds /    60)); $seconds = $seconds %    60; }
+  if ($seconds >=     1) { $result .= sprintf("%ds ", int($seconds /     1)); $seconds = $seconds %     1; }
+  chop $result;
+  $result;
 }
 
 sub populate_building_with_production {
