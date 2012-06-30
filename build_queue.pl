@@ -180,7 +180,12 @@ for (my $j = $[; $j <= $#queue; $j++) {
     my $build = eval { $client->body_build($body_id, $name, $x, $y) };
     if ($build) {
       emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
-      splice(@queue, $j, 1);
+      if ($retain) {
+        emit("Retaining build command for $name");
+      }
+      else {
+        splice(@queue, $j, 1);
+      }
       if ($rebuild) {
         emit("Requeueing $name at the front of the queue");
         unshift(@queue, "$priority++upgrade 1 $name\n");
