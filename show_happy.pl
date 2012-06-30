@@ -23,10 +23,11 @@ for my $id (keys(%$planets)) {
   $happy{$id} = $client->body_status($id)->{happiness};
 }
 for my $id (sort { $happy{$b} <=> $happy{$a} } keys %happy) {
-  printf("%13.0f %10.0f/hr   %s\n",
-         $happy{$id},
-         $waste
-         ? $client->body_status($id)->{happiness_hour} - max(0, $client->body_status($id)->{waste_hour})
-         : $client->body_status($id)->{happiness_hour},
-         $planets->{$id});
+  my $happy = sprintf("%0.0f ", $happy{$id});
+  1 while $happy =~ s/(\d)(\d\d\d)(\D)/$1,$2$3/;
+  my $perhour = sprintf("%0.0f ", $waste
+    ? $client->body_status($id)->{happiness_hour} - max(0, $client->body_status($id)->{waste_hour})
+    : $client->body_status($id)->{happiness_hour});
+  1 while $perhour =~ s/(\d)(\d\d\d)(\D)/$1,$2$3/;
+  printf("%20s %15s/hr   %s\n", $happy, $perhour, $planets->{$id});
 }

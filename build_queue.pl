@@ -18,6 +18,7 @@ my $body_name;
 my $queue_name;
 my $debug = 0;
 my $quiet_no_body = 0;
+my $no_wait = 0;
 
 GetOptions(
   "config=s" => \$config_name,
@@ -25,6 +26,7 @@ GetOptions(
   "queue=s"  => \$queue_name,
   "debug"    => \$debug,
   "quiet_no_body"    => \$quiet_no_body,
+  "no_wait"  => \$no_wait,
 ) or die "$0 --config=foo.json --body=Bar --queue=queue.file\n";
 
 my $client = Client->new(config => $config_name);
@@ -103,11 +105,13 @@ for (my $j = $[; $j <= $#queue; $j++) {
   my $quiet;
   my $rebuild;
   my $requeue;
+  my $retain;
   $quiet = 1 if $command =~ s/^\-//;
   $abort = 1 if $command =~ s/^\!//;
   my $priority = ($abort) ? '!' : '';
   $rebuild = 1 if $command =~ s/^\+\+//;
   $requeue = 1 if $command =~ s/^\+//;
+  $retain = 1 if $command =~ s/^\*//;
   my $sleepy = (localtime())[1] % 30;
 
   print "Inspecting $command\n" if $debug;
@@ -228,14 +232,19 @@ for (my $j = $[; $j <= $#queue; $j++) {
         }
         my $upgrade = $client->building_upgrade($building->{url}, $id);
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
-        splice(@queue, $j, 1);
-        if ($rebuild) {
-          emit("Requeueing $realname at the front of the queue");
-          unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, ($level ? $level + 1 : 0), $realname));
+        if ($retain) {
+          emit("Retaining upgrade command for $level $realname");
         }
-        elsif ($requeue) {
-          emit("Requeueing $realname at the back of the queue");
-          push(@queue, sprintf("+upgrade %s %s\n", ($level ? $level + 1 : 0), $realname));
+        else {
+          splice(@queue, $j, 1);
+          if ($rebuild) {
+            emit("Requeueing $realname at the front of the queue");
+            unshift(@queue, sprintf("%s++upgrade %s %s\n", $priority, ($level ? $level + 1 : 0), $realname));
+          }
+          elsif ($requeue) {
+            emit("Requeueing $realname at the back of the queue");
+            push(@queue, sprintf("+upgrade %s %s\n", ($level ? $level + 1 : 0), $realname));
+          }
         }
         @queue = map { s/^\-//; $_; } @queue;
         write_queue();
@@ -293,14 +302,26 @@ for (my $j = $[; $j <= $#queue; $j++) {
         next;
       }
       if (!@halls) {
-        emit("Building Halls of Vrbansk, waiting 16 seconds");
-        my $result = $client->body_build($body_id, "Halls of Vrbansk");
-        push(@halls, $result->{building});
-        sleep(16);
+        if ($no_wait) {
+          emit("Building Halls of Vrbansk");
+          my $result = $client->body_build($body_id, "Halls of Vrbansk");
+          push(@builds, $name);
+          next;
+        } else {
+          emit("Building Halls of Vrbansk, waiting 16 seconds");
+          my $result = $client->body_build($body_id, "Halls of Vrbansk");
+          push(@halls, $result->{building});
+          sleep(16);
+        }
       }
       emit("Sacrificing ".($target->{level}+1)." halls to upgrade $name");
       $client->halls_sacrifice($halls[0]{id}, $target->{id});
-      splice(@queue, $j, 1);
+      if ($retain) {
+        emit("Retaining sacrifice command for $level $name");
+      }
+      else {
+        splice(@queue, $j, 1);
+      }
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
       $j--;
