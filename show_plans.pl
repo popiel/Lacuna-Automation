@@ -9,11 +9,13 @@ use JSON::PP;
 
 my $config_name = "config.json";
 my @body_name;
+my @plan_name;
 my $total_only;
 
 GetOptions(
   "config=s" => \$config_name,
   "body=s"   => \@body_name,
+  "name|plan|n=s"   => \@plan_name,
   "total!"   => \$total_only,
 ) or die "$0 --config=foo.json --body=Bar --total_only\n";
 
@@ -23,7 +25,7 @@ my $planets = $client->empire_status->{planets};
 my %plans;
 for my $body_id (keys(%$planets)) {
   my $body_name = $planets->{$body_id};
-  next unless !@body_name || grep { $body_name =~ /$_/ } @body_name;
+  next unless !@body_name || grep { $body_name =~ /$_/i } @body_name;
 
   my $plans = eval { $client->body_plans($body_id) };
   next unless $plans;
@@ -36,6 +38,7 @@ for my $body_id (keys(%$planets)) {
 }
 print "----\n";
 for my $name (sort keys %plans) {
+  next unless !@plan_name || grep { $name =~ /$_/i } @plan_name;
   my $plans = $plans{$name};
   my $total = sum(values %$plans);
   printf("%5d %-30s\n", $total, $name);
