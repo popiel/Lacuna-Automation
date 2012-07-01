@@ -81,11 +81,11 @@ print "$body->{star_name} $body->{orbit}: $body->{name}\n";
 print "Invalid after ".format_time($result->{_invalid})."\n";
 print "Builds complete at ".format_time($build_end)."\n" if $build_end;
 print "\n";
-printf ("Food  : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "food"));
-printf ("Ore   : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "ore"));
-printf ("Water : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "water"));
-printf ("Energy: %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "energy"));
-printf ("Waste : %8d / %8d, %6d/hour => %5s at %s\n", resource_info($result->{status}, "waste"));
+printf ("Food  : %14s / %14s, %12s/hour => %5s at %s\n", resource_info($result->{status}, "food"));
+printf ("Ore   : %14s / %14s, %12s/hour => %5s at %s\n", resource_info($result->{status}, "ore"));
+printf ("Water : %14s / %14s, %12s/hour => %5s at %s\n", resource_info($result->{status}, "water"));
+printf ("Energy: %14s / %14s, %12s/hour => %5s at %s\n", resource_info($result->{status}, "energy"));
+printf ("Waste : %14s / %14s, %12s/hour => %5s at %s\n", resource_info($result->{status}, "waste"));
 print "\n";
 print "Buildings ($body->{building_count} of $body->{size}, with $body->{plots_available} remaining):";
 # print "\nStorage:\n";
@@ -159,9 +159,9 @@ sub resource_info {
   my $body = $status->{body};
   my @list;
 
-  push(@list, $body->{"${resource}_stored"});
-  push(@list, $body->{"${resource}_capacity"});
-  push(@list, $body->{"${resource}_hour"});
+  push(@list, Client::format_bignum($body->{"${resource}_stored"}));
+  push(@list, Client::format_bignum($body->{"${resource}_capacity"}));
+  push(@list, Client::format_bignum($body->{"${resource}_hour"}));
   if ($list[2] == 0) {
     push(@list, "stable");
     push(@list, format_time($status->{_time}));
@@ -176,7 +176,7 @@ sub resource_info {
   my $current = $body->{"${resource}_stored"} + $body->{"${resource}_hour"} * (time() - $status->{_time}) / 3600;
   $current = 0 if $current < 0;
   $current = $body->{"${resource}_capacity"} if $current > $body->{"${resource}_capacity"};
-  unshift(@list, $current);
+  unshift(@list, Client::format_bignum($current));
   return @list;
 }
 

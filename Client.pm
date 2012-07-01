@@ -92,6 +92,14 @@ sub format_time {
   sprintf("%4d-%02d-%02d %02d:%02d:%02d", @elems);
 }
 
+sub format_bignum {
+  my $num = shift;
+  my $str = sprintf("%0.0f ", $num);
+  1 while $str =~ s/(\d)(\d\d\d)(\D)/$1,$2$3/;
+  chop $str;
+  return $str;
+}
+
 sub log_call {
   my $api = shift;
   my $message = shift;
