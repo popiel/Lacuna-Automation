@@ -367,7 +367,7 @@ sub scow_dump {
 
     for my $scow (
         sort { $b->{hold_size} <=> $a->{hold_size}            }
-        grep { $_->{type} eq "scow" && $_->{task} eq "Docked" }
+        grep { $_->{type} =~ /scow/ && $_->{task} eq "Docked" }
         @{$ships->{available}}
     ) {
         my $result = eval {
