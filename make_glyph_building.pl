@@ -65,19 +65,12 @@ my %recipes = (
   'Terraforming Platform'         => [ [ qw(methane zircon magnetite beryl) ] ],
   'Volcano'                       => [ [ qw(magnetite uraninite) ] ],
 );
-my %plurals = (
-  'Citadel of Knope'         => 'Citadels of Knope',
-  'Halls of Vrbansk'         => 'Halls of Vrbansk',
-  'Kalavian Ruins'           => 'Kalavian Ruins',
-  'Library of Jith'          => 'Libraries of Jith',
-  'Pantheon of Hagness'      => 'Pantheons of Hagness',
-  'Temple of the Drajilites' => 'Temples of the Drajilites',
-);
 
 die "Unknown building type: $plan_type\n" unless grep { $_ =~ /$plan_type/ } keys %recipes;
 
-my $plan_type = first { $_ =~ /$plan_type/ } keys %recipes;
-my $plan_plural = $plurals{$plan_type} || $plan_type.'s';
+$plan_type = first { $_ =~ /$plan_type/ } keys %recipes;
+my ($what, $of_whom) = split / of /, $plan_type, 2;
+my $plan_plural = $what.($what =~ /s$/ ? '' : 's');
 my @recipes = @{$recipes{$plan_type}};
 
 my $client = Client->new(config => $config_name);

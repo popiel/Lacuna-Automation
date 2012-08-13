@@ -153,13 +153,13 @@ sub Main {
 
             verbose("keeping waste between $minimum_waste and $maximum_waste units");
             if ($s->{waste_hour} < 0) { # we're burning waste
-                output("Waste rate is negative (-)");
+                output("Waste rate is negative ($s->{waste_hour})");
 
                 my $hours_left = sprintf('%0.2f', -1 * $s->{waste_stored} / $s->{waste_hour});
                 output("We have $hours_left hours ($s->{waste_stored} units) of waste stored");
             }
             elsif ($s->{waste_hour} > 0) { # we are making waste already
-                output("Waste rate is positive (+)");
+                output("Waste rate is positive ($s->{waste_hour})");
 
                 my $hours_full = sprintf('%0.2f',
                     ( $s->{waste_capacity} - $s->{waste_stored} ) / $s->{waste_hour}
@@ -367,7 +367,7 @@ sub scow_dump {
 
     for my $scow (
         sort { $b->{hold_size} <=> $a->{hold_size}            }
-        grep { $_->{type} eq "scow" && $_->{task} eq "Docked" }
+        grep { $_->{type} =~ /scow/ && $_->{task} eq "Docked" }
         @{$ships->{available}}
     ) {
         my $result = eval {
