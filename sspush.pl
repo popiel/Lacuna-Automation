@@ -12,16 +12,17 @@ use Client;
 use Getopt::Long;
 use IO::Handle;
 use JSON::PP;
-use List::Util;
+use List::Util 'sum';
 
 autoflush STDOUT 1;
 autoflush STDERR 1;
 
 my %opt;
-GetOptions( \%opt, 'config=s', 'from=s', 'to=s', 'ship=s', 'debug', 'quiet', 'log=s', 'types=s', 'send=i' )
+GetOptions( \%opt, 'config=s', 'from=s', 'to=s', 'ship=s', 'debug', 'quiet', 'log=s', 'types=s', 'send=i', 'dry-run', 'ore=s@', 'food=s@' )
     or die "$0 --config=foo.json --from=PlanetBar --to=SpaceStationFoo --ship=shipname\n";
 
 $opt{'config'} ||= 'config.json';
+$opt{'types'} ||= 'food,ore,water,energy';
 
 my $client = Client->new(config => $opt{'config'});
 my $planets = $client->empire_status->{planets};
@@ -43,8 +44,9 @@ my $to_name = $planets->{$to_id};
 my %resources = (
     'water' => [ qw/water/ ],
     'energy' => [ qw/energy/ ],
-    'food' => [ qw/algae apple bean beetle bread burger cheese chip cider corn fungus lapis meal milk pancake pie potato root shake soup syrup wheat/ ],
-    'ore' => [ qw/anthracite bauxite beryl chalcopyrite chromite fluorite galena goethite gold gypsum halite kerogen magnetite methane monazite rutile sulfur trona uraninite zircon/ ],
+    'food' => $opt{'food'} || [ qw/algae apple bean beetle bread burger cheese chip cider corn fungus lapis meal milk pancake pie potato root shake soup syrup wheat/ ],
+    'ore' => $opt{'ore'} || [ qw/anthracite bauxite beryl chalcopyrite chromite fluorite galena goethite gold gypsum halite kerogen magnetite methane monazite rutile sulfur trona uraninite zircon/ ],
+    'waste' => [ qw/waste/ ],
 );
 
 # what ships and resources are available?
@@ -82,13 +84,30 @@ for my $supply_pod ( grep $to_buildings->{'buildings'}{$_}{'name'} eq 'Supply Po
 
 my $to_status = $client->body_status($to_id);
 my %need;
-for my $resource_type ( $opt{'types'} ? split /,/, $opt{'types'} : sort keys %resources ) {
+for my $resource_type ( split /,/, $opt{'types'} ) {
     $need{$resource_type} = int( $to_status->{ $resource_type . '_capacity' } - $to_status->{ $resource_type . '_stored' } - $to_status->{ $resource_type . '_hour' } * $example_ship->{'estimated_travel_time'} / 3600 ) - ( $supply_pod_capacity{$resource_type} || 0 ) - 1;
 #    printf "%s\t%s\t%s/%s\t%s/hr\n", $resource_type, $need{$resource_type}, map $to_status->{$resource_type . "_$_"}, qw/stored capacity hour/;
     delete $need{$resource_type} if $need{$resource_type} <= 0;
 }
 
+if ( $opt{'dry-run'} ) {
+    print "Resources needed:\n";
+    print "$_: $need{$_}\n" for sort keys %need;
+    print "total: " . sum( values %need ) . "\n";
+}
+
 my $ship_count = ($opt{send} || scalar(@ship_list));
+my $max_send = $example_ship->{'hold_size'} * $ship_count;
+if ($max_send < sum values %need) {
+    my $factor = $max_send / sum values %need;
+    $need{$_} *= $factor for keys %need;
+}
+
+if ( $opt{'dry-run'} ) {
+    print "Ship capacity: $max_send\n";
+    exit;
+}
+
 $need{$_} = int($need{$_} / $ship_count) for (keys %need);
 for my $ship ( @ship_list[0 .. $ship_count - 1] ) {
     my %send;
