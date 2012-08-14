@@ -71,6 +71,7 @@ die "Unknown building type: $plan_type\n" unless grep { $_ =~ /$plan_type/ } key
 $plan_type = first { $_ =~ /$plan_type/ } keys %recipes;
 my ($what, $of_whom) = split / of /, $plan_type, 2;
 my $plan_plural = $what.($what =~ /s$/ ? '' : 's');
+$plan_plural =~ s/ys$/ies/;
 my @recipes = @{$recipes{$plan_type}};
 
 my $client = Client->new(config => $config_name);
