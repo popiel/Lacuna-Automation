@@ -94,7 +94,7 @@ $star_db->{AutoCommit} = 0;
 if (defined($opts{'load-stars'})) {
     my $filename = $opts{'load-stars'} || 'stars.csv';
     unless (-f $filename) {
-      system("wget -O $filename $client->{uri}.s3.amazonaws.com/stars.csv");
+      system("wget --no-check-certificate -O $filename $client->{uri}.s3.amazonaws.com/stars.csv");
     }
     my $file;
     open($file, "<:encoding(utf8)", $filename) or die "Couldn't read $filename: $!\n";
