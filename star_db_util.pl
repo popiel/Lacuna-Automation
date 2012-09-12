@@ -40,6 +40,7 @@ GetOptions(\%opts,
     'scan-nearby',
     'scan-sectors=i',
     'load-stars:s',
+    'all-sectors',
 );
 
 usage() if $opts{h};
@@ -224,15 +225,35 @@ SQL
     output("$db_file synchronized with $opts{'merge-db'}\n");
 }
 
-unless ($opts{'no-fetch'}) {
-    my $empire = $client->empire_status;
+my %probed;
 
-    # reverse hash, to key by name instead of id
-    my %planets = map { $empire->{planets}{$_}, $_ } keys %{$empire->{planets}};
+if ($opts{'all-sectors'}) {
+  my $x_values = $star_db->selectcol_arrayref('select distinct x from stars order by x');
+  unless ($x_values && @$x_values) {
+    output("We need to know where the stars are before scanning all sectors; try --load-stars first\n");
+  }
+  else {
+    for my $x (@$x_values) {
+      # if x1 and x2 are the same, the width is 0 (and hence less than 30*30)
+      # Right?  Right!
+      # if that gets fixed, change this to take advantage of the fact that
+      # every 15 x units only have stars in one band of 3 values and one band
+      # of 4 values, so get it all in 3x300 and 4x225 chunks (4800 total calls
+      # instead of the 1400 here)
+      for my $star ( @{ $client->map_get_stars( $x, -1500, $x, 1500 )->{'stars'} } ) {
+        process_star($star);
+      }
+    }
+  }
+}
+elsif ( ! $opts{'no-fetch'} ) {
+  my $empire = $client->empire_status;
+
+  # reverse hash, to key by name instead of id
+  my %planets = map { $empire->{planets}{$_}, $_ } keys %{$empire->{planets}};
 
   # Scan each planet
   my @searchboxes;
-  my %probed;
   for my $planet_name ( keys %planets ) {
     if ( keys %do_planets ) {
       next unless $do_planets{ normalize_planet($planet_name) };
@@ -308,8 +329,13 @@ unless ($opts{'no-fetch'}) {
       process_star($star);
     }
   }
+}
 
+{
   if ($opts{'oracle'}) {
+    my $empire = $client->empire_status;
+    my %planets = map { $empire->{planets}{$_}, $_ } keys %{$empire->{planets}};
+
     my $oracle_rpc = $opts{'oracle-max-rpc'} || 1000;
     for my $planet_name ( keys %planets ) {
       if ( keys %do_planets ) {
