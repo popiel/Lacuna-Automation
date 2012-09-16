@@ -96,6 +96,27 @@ for my $body_id (@body_ids) {
 
 emit_json("Current goals", \@current);
 
+my @tasks;
+for my $goal (@current) {
+}
+
+sub tasks_for_goal {
+  my $goal = shift;
+
+  my @buildings;
+  for my $name (@{$groups{$_->{name}} || [ $_->{name} ]}) {
+    push(@buildings, eval { $client->find_building($body_id, $name) });
+  }
+  $goal->{count} ||= 1;
+  if (@buildings < $goal->{count}) {
+#    { task => "build", name
+
+  }
+    @buildings = sort { $b->{level} <=> $a->{level} } @buildings;
+    @buildings = @buildings[0..$_->{count}] if $_->{count} && @buildings > $_->{count};
+
+}
+
 sub emit {
   my $message = shift;
   my $prefix = shift;
