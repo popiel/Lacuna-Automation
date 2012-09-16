@@ -60,6 +60,8 @@ eval {
     $for_name = $planets->{$for_id};
   }
 
+  @body_name = () if grep { $_ eq "ALL" } @body_name;
+
   push(@body_name, sort values(%$planets)) unless @body_name;
   warn "Looking at bodies ".join(", ", @body_name)."\n" if $debug;
   for my $body_name (@body_name) { 
