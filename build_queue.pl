@@ -292,7 +292,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
     next if @builds;
 
     my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
-    my $target = (grep { $_->{name} eq $name && (!$level || $_->{level} == $level) } @buildings)[0];
+    my $target = (grep { $_->{name} eq $name && ($level ? $_->{level} == $level : $_->{level} < 30)} @buildings)[0];
     if ($target) {
       my @halls = grep { $_->{name} eq "Halls of Vrbansk" } @buildings;
       my $plans = eval { first { $_->{name} eq "Halls of Vrbansk" } @{$client->body_plans($body_id)->{plans}} }
