@@ -278,6 +278,18 @@ sub empire_status {
   return $result || croak "Couldn't get empire status";
 }
 
+sub empire_public_profile {
+  my $self = shift;
+  my $id = shift;
+
+  my $result = $self->cache_read( type => 'empire_profile', id => $id, stale => 86400 );
+  $result && return $result;
+
+  $result = $self->call(empire => view_public_profile => $id);
+  $self->cache_write( type => 'empire_profile', id => $id, data => $result, invalid => time() + 86400 );
+  return $result;
+}
+
 sub match_planet {
   my $self = shift;
   my $name = shift;
@@ -1100,6 +1112,7 @@ sub present_captcha {
 {
     my %path_for = (
         empire_status                => 'empire/status',
+        empire_profile               => 'empire/%d/profile',
         body_status                  => 'body/%d/status',
         buildings                    => 'body/%d/buildings',
         buildable                    => 'body/%d/buildable',
