@@ -48,6 +48,7 @@ my $max_build_time = 86400;
 my $max_distance = 100;
 my @bias;
 my $greedy = 0;
+my $optimize = 1;
 my $avoid_populated = 0;
 my $noaction = 0;
 my $purge = 0;
@@ -62,6 +63,7 @@ GetOptions(
   "max_distance|distance=i"     => \$max_distance,
   "bias=s"                      => \@bias,
   "greedy!"                     => \$greedy,
+  "optimize!"                   => \$optimize,
   "avoid_populated!"            => \$avoid_populated,
   "noaction|dryrun|n!"          => \$noaction,
   "purge!"                      => \$purge,
@@ -183,7 +185,12 @@ if ($purge) {
   }
 }
 
-my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ores[$_], $density[$_]) } (0..$#ores); $density{subtype} = $density[$#density]; \%density } qw(
+my @planet_types = map {
+  my @density = split(/:/, $_);
+  my %density = map { ($ores[$_], $density[$_]) } (0..$#ores);
+  $density{subtype} = $density[$#density];
+  \%density
+} qw(
 1000:1:1:1:1000:1000:1000:1000:1:1000:1:1000:1000:1:1:1:1:1:1000:1000:p11
 1:1000:1000:1000:1:1:1:1:1000:1:1000:1:1:1000:1000:1000:1000:1000:1:1:p12
 1:1:1000:1:1:9000:1:1:1:1:1:1:1:1:1:1:1:1:1:1:a1
@@ -252,6 +259,8 @@ my @planet_types = map { my @density = split(/:/, $_); my %density = map { ($ore
 1:1:1:1:1:1:1:1:1:1:4000:1:1:1:1:1:4000:2000:1:1:p40
 );
 
+@planet_types = grep { !($_->{subtype} =~ /p(\d+)/ && $1 > 20) } @planet_types;
+
 # emit_json("planet_types", \@planet_types);
 
 for (1..($possible - $active)) {
@@ -268,6 +277,7 @@ for (1..($possible - $active)) {
 
 $debug && dump_densities("First cut");
 
+if ($optimize) {
 my $change;
 do {
   $change = 0;
@@ -328,6 +338,8 @@ do {
     }
   }
 } while $change;
+
+}
 
 @how && dump_densities("Third cut");
 
