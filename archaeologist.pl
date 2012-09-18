@@ -10,11 +10,15 @@
 # that disappear, and also not block up your shipyards quite as much when
 # replacing excavators.
 #
-# By default, the script will start by balancing p11 and p12 planets,
-# then modifying a little bit from there to cancel out any imbalances you
-# already have from your base planets.  Most of the time, that means it's
-# using almost entirely p11 and p12.  To get it to start with stuff other
-# than p11 and p12, use the "-greedy" argument.
+# The script checks each of your planets, to see if any are below their
+# excavator limits.  If there is a shortfall, it sends any available
+# excavators to selected bodies, and then builds additional excavators
+# if there aren't enough on hand.
+#
+# Body selection for excavation is greedy based on current knowledge.
+# The script looks at all the planet types you have near you (within the
+# specified max_distance), uses whichever types best balance the ore
+# distribution (possibly modified by the bias command-line argument).
 #
 # If you want to have the script try to balance glyph production for a
 # small group of planets instead of your entire empire, then you can use
@@ -35,7 +39,7 @@ use Getopt::Long;
 use IO::Handle;
 use Data::Dumper;
 use JSON::XS;
-use List::Util qw(min max sum first);
+use List::Util qw(min max sum first reduce);
 use File::Path;
 
 autoflush STDOUT 1;
@@ -105,6 +109,7 @@ if ((@body_ids != @body_names)) {
 my %arches = map { ($_, scalar(eval { $client->find_building($_, "Archaeology Ministry") } )) } @body_ids;
 my %ports  = map { ($_, scalar(eval { $client->find_building($_, "Space Port"          ) } )) } @body_ids;
 my %yards  = map { ($_, scalar(eval { $client->find_building($_, "Shipyard"            ) } )) } @body_ids;
+
 # Filter down to just those bodies with archaeology ministries, spaceports, and shipyards
 my @body_ids = grep { ref($arches{$_}) eq 'HASH' && ref($ports{$_}) eq 'HASH' && ref($yards{$_}) eq 'HASH' } @body_ids;
 $debug > 1 && emit_json("Pruned body_ids", \@body_ids);
@@ -116,13 +121,16 @@ my $possible = 0;
 my $active = 0;
 my %ores;
 my @ores;
+my %active;
 for my $body_id (@body_ids) {
   db_clear_excavated_by($body_id);
   $possible += $excavators{$body_id}{max_excavators};
   $active--;
+  $active{$body_id}--;
   for my $excavator (@{$excavators{$body_id}{excavators}}) {
     db_set_excavated_by($body_id, $excavator->{body}{id});
     $active++;
+    $active{$body_id}++;
     for my $ore (keys(%{$excavator->{body}{ore}})) {
       $ores{$ore} += $excavator->{body}{ore}{$ore};
     }
@@ -136,6 +144,7 @@ for my $body_id (@body_ids) {
     db_set_excavated_by($body_id, $excavator->{to}{id});
     $excavator->{body}{ore} = db_lookup_ores($excavator->{to}{id});
     $active++;
+    $active{$body_id}++;
     for my $ore (keys(%{$excavator->{body}{ore}})) {
       $ores{$ore} += $excavator->{body}{ore}{$ore};
     }
@@ -157,239 +166,67 @@ if (@bias) {
   %ores = %backup;
 }
 
-my @how;
-dump_densities("Total");
-emit("$active excavators active out of $possible excavators possible");
+dump_densities("Starting");
 
-if ($purge) {
-  $active = 0;
-  %ores = ();
-  for my $body_id (@body_ids) {
-    my $excavator = $excavators{$body_id}{excavators}[0];
-    for my $ore (keys(%{$excavator->{body}{ore}})) {
-      $ores{$ore} += $excavator->{body}{ore}{$ore};
-    }
-    @ores = sort keys %ores;
-    my $port = $client->find_building($body_id, "Space Port");
-    my $ships = $client->port_all_ships($body_id);
-    my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
-    my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
-    for my $excavator (@travelling) {
-      db_set_excavated_by($body_id, $excavator->{to}{id});
-      $excavator->{body}{ore} = db_lookup_ores($excavator->{to}{id});
-      $active++;
-      for my $ore (keys(%{$excavator->{body}{ore}})) {
-        $ores{$ore} += $excavator->{body}{ore}{$ore};
-      }
-    }
-  }
+sub find_value {
+  my ($addition) = shift;
+  my %weighted = map { ($_, ($ores{$_} + $addition->{$_}) / $bias{$_}) } @ores;
+  return min(values %weighted);
 }
-
-my @planet_types = map {
-  my @density = split(/:/, $_);
-  my %density = map { ($ores[$_], $density[$_]) } (0..$#ores);
-  $density{subtype} = $density[$#density];
-  \%density
-} qw(
-1000:1:1:1:1000:1000:1000:1000:1:1000:1:1000:1000:1:1:1:1:1:1000:1000:p11
-1:1000:1000:1000:1:1:1:1:1000:1:1000:1:1:1000:1000:1000:1000:1000:1:1:p12
-1:1:1000:1:1:9000:1:1:1:1:1:1:1:1:1:1:1:1:1:1:a1
-1:1:4000:5000:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1000:a2
-1:1:1:1:1:1:1:1:1:1:1:1:1:1:1000:1:1:1:1000:8000:a3
-1:1:1:1:1:1:1:1:1000:1:1:1:1:1:9000:1:1:1:1:1:a4
-1:1:1:1:1:1000:1:1:8500:1:1:1:1:1:1:1:1:1:1:1:a5
-1:1:1:1:1:1:5790:1:1:1:1:40:1:1:1:1:1:1:1:1:a6
-1:1:1:1:1:3291:1:1:1:1:1:1:1:1:1239:1:1:1:2377:1:a7
-1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:7954:a8
-1:1:1:1:1:1:1:1:1:1:1:1:1:5500:1:1:1:1:1:1:a9
-6250:108:1:1:1:1:1:1:1:1:55:1:1:1:1:1:1:300:1:1:a10
-1:1:1:1:1:1:1:1:1:1:1:1:9980:1:1:1:1:1:1:1:a11
-289:269:313:299:320:307:278:292:310:311:301:284:296:285:319:258:324:293:276:275:a12
-1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:6574:1:2590:a13
-1:1:1:1:1:1:3038:2895:1:2897:1:1:1:1:1:1:1:1:1:1:a14
-1:1:1:1:8931:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:a15
-1:1894:1:1:1:1793:1:1:2132:1:1:1:1:1:1:1:1:2018:1:1:a16
-1:1:4233:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:a17
-1:1:1:1:1:1:1:1:1:4120:1:1:1:1:1:1:1:3326:1:1:a18
-1:1:1:3333:1:1:1:1:1:1:1:1:1:1:1:1:2873:1:1:1:a19
-1:1:1:1:1:1:1:6342:1:1:1:1:1:1:1:1:1:1:1:1:a20
-1:1:1:1:1:1:1:1:1:1:1:1:10:1:1:1:1:1:1:1:debris1
-1:900:1:700:900:100:800:400:100:1:1:1:500:1:300:800:1:400:1:200:a22
-1:1:1000:1000:1000:1000:1000:1:1:1:1:1:1:1:1:1000:1:1:1:1000:a23
-1:1:1:1:1:1:1:1:1:4000:1:1:1:1:1500:1:3000:1:1:1:a24
-1:1:1:1:1:1:1:1:1:1:7900:1:1:1:1:1:1:1:1:1:a25
-1500:1:1:1:1:1:1:1:1:1:1:1500:1500:1:750:1:1:1:1750:1:a26
-1:250:1:1000:5000:1:1500:500:500:250:250:1:1:1:1:500:1:1:250:1:p1
-1:1:310:1:1:190:1:1:250:1500:1:1:1000:2700:130:1:2300:1500:1:120:p2
-1700:1:1:1:1:1:1:1:1:1:1:1400:1:2900:1:1:1:1:3000:1000:p3
-1:1:1:1000:1:1:1:1500:1:1500:1:1500:1500:1:1:1:1500:1:1500:1:p4
-1:2250:1:250:1:1:2250:1250:1:1250:250:1:250:250:1:1250:250:250:250:1:p5
-1:1:1:1:1:1:1:1400:1:1500:1000:1:1900:1200:1:1:1700:1300:1:1:p6
-1:1700:1000:2800:1:1:1:2400:1:2100:1:1:1:1:1:1:1:1:1:1:p7
-3100:1:1:1:1:1:1:1:1:1250:1300:3100:1:1:1:1:1:1250:1:1:p8
-100:300:1:100:900:1:200:200:1:600:500:1800:100:1700:1:800:1600:700:400:1:p9
-500:1:250:1:1:250:1:1000:1:500:1:500:5000:500:250:1:500:500:1:250:p10
-1500:1:1:1300:1400:1:2200:1:1:1:1:1500:1:1:1:2100:1:1:1:1:p13
-1:100:1:100:100:1:100:100:1:100:100:1:100:2700:1:100:2300:4000:100:1:p14
-1:250:1:100:300:1:400:4500:1:500:500:1:2000:500:1:200:270:330:250:1:p15
-3300:1:1:1:400:1:200:300:1:1:700:2700:1:1:1:600:100:900:800:1:p16
-1:1:1:1:1:1:1:1:1:1:1:1:4200:1900:1:1:1:3900:1:1:p17
-1:4200:1:1:3200:1:1:1:1:1:1:1:1:1:1:1:1:1:2600:1:p18
-1100:300:1:700:100:1:200:700:1:700:400:1200:1400:600:1:700:700:500:700:1:p19
-1:900:1:1:1400:1:3100:1:1:1:1:1:1800:1:1:2800:1:1:1:1:p20
-1:1:1:1:1:1:1:1:1:1:1:1:1:1:2000:1:1:1:8000:1:p21
-1:1:1:1:1:1:5000:1:1:1:5000:1:1:1:1:1:1:1:1:1:p22
-3000:1:1:1:1:1:1:1:1:1:1:3500:1:3500:1:1:1:1:1:1:p23
-1:1:3300:1:1:1:1:1:1:3300:1:1:1:1:1:1:1:1:1:3400:p24
-1:1:1:3000:1000:1:4000:1:1000:1:1:1:1:1:1:2000:1:1:1:1:p25
-1:1:1:100:100:1:100:100:9000:100:100:100:100:100:1:100:1:1:1:1:p26
-1:1:1:1:1:1:100:100:1:1:9500:1:1:100:100:1:1:1:1:100:p27
-1:1500:1:1:1:1:1:2500:1:2000:3500:1:1:1:1:1:1:1:1500:1:p28
-1:1:1:1:1:1:1:1:1:3000:1:1:1:1:2000:1:5000:1:1:1:p29
-1:3000:1:4000:1:1:1:1:3000:1:1:1:1:1:1:1:1:1:1:1:p30
-2000:1:1:1:1:1:1:1:1:1:1:3000:1:1000:1:1:1500:2500:1:1:p31
-1:2000:2000:1:2000:1:1:2000:1:1:1:1:2000:1:1:2000:1:1:1:1:p32
-1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:1:p33
-1:1:2000:1:1:2000:1:1:1:1:1:1:2000:1:2000:1:1:1:1:2000:p34
-500:500:500:500:500:500:500:500:500:500:500:500:500:500:500:500:500:500:500:500:p35
-1:100:1:100:100:1:1:100:1:100:1:1:1:1:100:100:100:1:1:1:p36
-2000:1:1:1:1:1:1:1:1:1:1:2000:2000:1:2000:1:1:1:2000:1:p37
-1:1:1:1:1:3000:1:1:1:1:1:1:1:1:1:1:7000:1:1:1:p38
-500:1:1:1:1:1:1:1:1:500:1:1500:1:4000:1500:1:2000:1:1:1:p39
-1:1:1:1:1:1:1:1:1:1:4000:1:1:1:1:1:4000:2000:1:1:p40
-);
-
-@planet_types = grep { !($_->{subtype} =~ /p(\d+)/ && $1 > 20) } @planet_types;
-
-# emit_json("planet_types", \@planet_types);
-
-for (1..($possible - $active)) {
-  my $type;
-  if ($greedy) {
-    my $worst = (sort { $ores{$a} / $bias{$a} <=> $ores{$b} / $bias{$b} } @ores)[0];
-    $type = (sort { $b->{$worst} <=> $a->{$worst} } @planet_types)[0];
-  } else {
-    $type = $planet_types[$_ % 2];
-  }
-  push(@how, $type);
-  $ores{$_} += $type->{$_} for @ores;
-}
-
-$debug && dump_densities("First cut");
-
-if ($optimize) {
-my $change;
-do {
-  $change = 0;
-  my %weighted = map { ($_, $ores{$_} / $bias{$_}) } @ores;
-  my $min = min(values %weighted);
-  $debug && emit("Minimum ore value: $min ".join(", ", grep { $weighted{$_} == $min } @ores));
-  for my $j (0..$#how) {
-    my %reduced = map { $_, $weighted{$_} - $how[$j]{$_} / $bias{$_} } @ores;
-    for my $type (@planet_types) {
-      my %increased = map { $_, $reduced{$_} + $type->{$_} / $bias{$_} } @ores;
-      my $worst = min(values %increased);
-      $debug > 2 && emit("Yield $worst after replacing pos $j with ".type_string($type));
-      if ($min < $worst) {
-        $min = $worst;
-        %weighted = %increased;
-        %ores = map { $_, $ores{$_} - $how[$j]{$_} + $type->{$_} } @ores;
-        $how[$j] = $type;
-        $change = 1;
-        $debug && emit("KEEPER! Yield $worst after replacing pos $j with ".type_string($type));
-      }
-    }
-  }
-} while $change;
-
-$debug && dump_densities("Second cut");
-
-my $change;
-do {
-  $change = 0;
-  my %weighted = map { ($_, $ores{$_} / $bias{$_}) } @ores;
-  my $min = min(values %weighted);
-  $debug && emit("Minimum ore value: $min ".join(", ", grep { $weighted{$_} == $min } @ores));
-  my %outer;
-  for my $j (0..$#how) {
-    next if $outer{$how[$j]{subtype}};
-    $outer{$how[$j]{subtype}} = 1;
-    my %inner;
-    for my $k (($j + 1)..$#how) {
-      next if $inner{$how[$k]{subtype}};
-      $inner{$how[$k]{subtype}} = 1;
-      my %reduced = map { $_, $weighted{$_} - $how[$j]{$_} / $bias{$_} - $how[$k]{$_} / $bias{$_} } @ores;
-      for my $type1 (@planet_types) {
-        for my $type2 (@planet_types) {
-          my %increased = map { $_, $reduced{$_} + $type1->{$_} / $bias{$_} + $type2->{$_} / $bias{$_} } @ores;
-          my $worst = min(values %increased);
-          $debug > 2 && emit("Yield $worst after replacing pos $j, $k with ".type_string($type1).", ".type_string($type2));
-          if ($min < $worst) {
-            $min = $worst;
-            %weighted = %increased;
-            %ores = map { $_, $ores{$_} - $how[$j]{$_} - $how[$k]{$_} + $type1->{$_} + $type2->{$_} } @ores;
-            $how[$j] = $type1;
-            $how[$k] = $type2;
-            $change = 1;
-            $debug && emit("KEEPER! Yield $worst after replacing pos $j, $k with ".type_string($type1).", ".type_string($type2));
-          }
-        }
-      }
-    }
-  }
-} while $change;
-
-}
-
-@how && dump_densities("Third cut");
-
-@how = reverse @how;
-
-if ($purge) {
-  for my $body_id (@body_ids) {
-    my @excavators = @{$excavators{$body_id}{excavators}};
-    my @keep = shift @excavators;
-    while (@excavators) {
-      my $test = shift @excavators;
-      my $match = -1;
-      for my $j (0..$#how) {
-        my @mismatch = grep { $test->{body}{ore}{$_} != $how[$j]{$_} } @ores;
-        $match = $j if !@mismatch;
-      }
-      if ($match >= 0) {
-        push(@keep, $test);
-        splice(@how, $match, 1);
-      } else {
-        emit("Abandoning excavator $test->{id} on $test->{body}{name}", $body_id);
-        $noaction or eval { $client->call(archaeology => abandon_excavator => $arches{$body_id}{id}, $test->{id}) }
-          or emit("Couldn't abandon excavator: $@", $body_id);
-      }
-    }
-    $excavators{$body_id}{excavators} = [ @keep ];
-  }
-}
-
-$debug && emit("Maximum build time $max_build_time seconds");
 
 for my $body_id (@body_ids) {
-  my $possible = $excavators{$body_id}{max_excavators};
-  my $active = @{$excavators{$body_id}{excavators}} - 1;
-  my $delta = $possible - $active;
-  next unless $delta > 0;
+  my $wanted = $excavators{$body_id}{max_excavators} - $active{$body_id};
+  next if $wanted < 1;
 
-  my $port = $client->find_building($body_id, "Space Port");
   my $ships = $client->port_all_ships($body_id);
   my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
   my @ready = grep { $_->{task} eq "Docked" } @excavators;
 
-  if (@excavators < $delta) {
+  my $status = $client->body_status($body_id);
+  while (@ready && $wanted) {
+    my @planet_types = map {
+      my @density = @$_;
+      my %density = map { ($ores[$_], $density[$_]) } (0..$#ores);
+      $density{subtype} = $density[$#density];
+      \%density
+    } db_find_body_types($status->{x}, $status->{y}, $max_distance * $max_distance);
+    emit_json("Types:", [ @planet_types ]);
+    my %values = map { ($_, find_value($_)) } @planet_types;
+    my $best_type = reduce { $values{$a} < $values{$b} ? $b : $a } @planet_types;
+    emit_json("Values for types:", [ map { ($_->{subtype}, $values{$_}) } @planet_types ]);
+    my $target = db_find_body($best_type->{subtype}, $status->{x}, $status->{y});
+
+    if ($target) {
+      if (($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) +
+          ($target->{y} - $status->{y}) * ($target->{y} - $status->{y}) > $max_distance * $max_distance) {
+        emit("Closest $best_type->{subtype} body $target->{name} at ($target->{x},$target->{y}) is too far away: ".
+             sqrt(($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) + 
+                  ($target->{y} - $status->{y}) * ($target->{y} - $status->{y})),
+             $body_id);
+        last;
+      } else {
+        db_set_excavated_by($body_id, $target->{body_id});
+        eval {
+          $noaction or $client->send_ship($ready[0]{id}, { body_id => $target->{body_id} });
+          emit("Sending excavator to $best_type->{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
+          1;
+        } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
+        $ores{$_} += $best_type->{$_} for @ores;
+        shift(@ready);
+      }
+    } else {
+      last;
+    }
+  }
+
+  if ($wanted) {
     my @yards = $client->find_building($body_id, "Shipyard");
     $_->{buildable} = $client->yard_buildable($_->{id}) for @yards;
     for my $yard (@yards) {
       $yard->{work}{seconds_remaining} = Client::parse_time($yard->{work}{end}) - time() if $yard->{work}{end};
       $debug && emit("Shipyard $yard->{id} working for $yard->{work}{seconds_remaining} seconds", $body_id);
     }
-    for (1..$delta) {
+    for (1..$wanted) {
       my $yard = (sort { ($a->{work}{seconds_remaining} + $a->{buildable}{buildable}{excavator}{cost}{seconds}) <=>
                          ($b->{work}{seconds_remaining} + $b->{buildable}{buildable}{excavator}{cost}{seconds}) } @yards)[0];
       if ($yard->{work}{seconds_remaining} < $max_build_time) {
@@ -411,34 +248,9 @@ for my $body_id (@body_ids) {
       }
     }
   }
-
-  my $status = $client->body_status($body_id);
-
-  for my $ship (@ready) {
-    my $target = db_find_body($how[0]{subtype}, $status->{x}, $status->{y});
-    if ($target) {
-      if (($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) +
-          ($target->{y} - $status->{y}) * ($target->{y} - $status->{y}) > $max_distance * $max_distance) {
-        emit("Closest $how[0]{subtype} body $target->{name} at ($target->{x},$target->{y}) is too far away: ".
-             sqrt(($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) + 
-                  ($target->{y} - $status->{y}) * ($target->{y} - $status->{y})),
-             $body_id);
-        last;
-      } else {
-        db_set_excavated_by($body_id, $target->{body_id});
-        eval {
-          $noaction or $client->send_ship($ship->{id}, { body_id => $target->{body_id} });
-          emit("Sending excavator to $how[0]{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
-          1;
-        } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
-        shift(@how);
-      }
-    } else {
-      emit("Cannot find available instance of body subtype $how[0]{subtype}", $body_id);
-      last;
-    }
-  }
 }
+
+dump_densities("Finished");
 
 sub dump_densities {
   my $label = shift;
@@ -449,12 +261,56 @@ sub dump_densities {
                           $ores{$ores[$_ + 5]}, $ores[$_ + 5],
                           $ores{$ores[$_ + 10]}, $ores[$_ + 10],
                           $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-  emit(join("\n", "Using planet types:",
-            map { type_string($_) } @how)) if @how;
   my $min = min(values %ores);
   my $median = (sort { $a <=> $b } values %ores)[@ores / 2];
   my $sum = sum(values %ores);
   emit("Minimum $min, median $median, total $sum");
+}
+
+sub db_find_body_types {
+  my ($x, $y, $max) = @_;
+  my @result;
+  my $ores = join(",", map { "o.$_" } @ores);
+  my $query = $star_db->prepare(qq(
+    select $ores, o.subtype from orbitals o
+    left join (
+      select star_id from orbitals
+      where empire_id is not null and empire_id <> ?
+    ) s on (o.star_id = s.star_id)
+    where o.empire_id is null and o.excavated_by is null and s.star_id is null
+      and (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?) < ?
+    group by $ores, o.subtype
+  ));
+  my $rv = $query->execute($client->empire_status->{id}, $x, $x, $y, $y, $max);
+  for (;;) {
+    my $row = $query->fetchrow_arrayref;
+    last unless $row;
+    push(@result, [ @$row ]);
+  }
+  return @result;
+}
+
+sub db_find_bodies {
+  my ($x, $y, $max) = @_;
+  my @result;
+  my $ores = join(",", map { "o.$_" } @ores);
+  my $query = $star_db->prepare(qq(
+    select o.body_id, o.name, o.x, o.y, o.subtype, $ores from orbitals o
+    left join (
+      select star_id from orbitals
+      where empire_id is not null and empire_id <> ?
+    ) s on (o.star_id = s.star_id)
+    where o.empire_id is null and o.excavated_by is null and s.star_id is null
+      and (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?) < ?
+    order by (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)
+  ));
+  my $rv = $query->execute($client->empire_status->{id}, $x, $x, $y, $y, $max, $x, $x, $y, $y);
+  for (;;) {
+    my $row = $query->fetchrow_hashref;
+    last unless $row;
+    push(@result, $row);
+  }
+  return @result;
 }
 
 sub db_find_body {
@@ -479,7 +335,7 @@ sub db_find_body {
       limit 1
     ), {}, $subtype, $x, $x, $y, $y);
     if ($debug > 1) {
-      emit_json("Find body: select body_id, name, x, y from orbitals where subtype = '$subtype' and empire_id is null and excavated_by is null order by (x - $x) * (x - $x) + (y - $y) * (y - $y) limit 1", $result);
+      emit_json("Find body: select body_id, name, x, y from orbitals where subtype = '$subtype' and empire_id is null and excavated_by is null order by (x - $x) * (x - $x) + (y - $y) * (y - $y) limit 3", $result);
     }
   }
   return $result;
