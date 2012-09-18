@@ -189,11 +189,12 @@ for my $body_id (@body_ids) {
       my %density = map { ($ores[$_], $density[$_]) } (0..$#ores);
       $density{subtype} = $density[$#density];
       \%density
-    } db_find_body_types($status->{x}, $status->{y}, $max_distance * $max_distance);
-    emit_json("Types:", [ @planet_types ]);
+    } db_find_body_types($status->{x}, $status->{y}, $max_distance);
+    $debug and emit("Types in range: ".join(" ", map { $_->{subtype} } @planet_types));
+    $debug > 2 and emit_json("Types:", [ @planet_types ]);
     my %values = map { ($_, find_value($_)) } @planet_types;
     my $best_type = reduce { $values{$a} < $values{$b} ? $b : $a } @planet_types;
-    emit_json("Values for types:", [ map { ($_->{subtype}, $values{$_}) } @planet_types ]);
+    $debug > 2 and emit_json("Values for types:", [ map { ($_->{subtype}, $values{$_}) } @planet_types ]);
     my $target = db_find_body($best_type->{subtype}, $status->{x}, $status->{y});
 
     if ($target) {
@@ -270,21 +271,27 @@ sub dump_densities {
 sub db_find_body_types {
   my ($x, $y, $max) = @_;
   my @result;
+  my $ores_q = join(",", map { "o.$_ as $_" } @ores);
   my $ores = join(",", map { "o.$_" } @ores);
+  my $dist2 = $max * $max;
   my $query = $star_db->prepare(qq(
-    select $ores, o.subtype from orbitals o
+    select * from (
+    select $ores_q, min((o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)) as dist, o.subtype as subtype from orbitals o
     left join (
       select star_id from orbitals
       where empire_id is not null and empire_id <> ?
     ) s on (o.star_id = s.star_id)
     where o.empire_id is null and o.excavated_by is null and s.star_id is null
-      and (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?) < ?
     group by $ores, o.subtype
+    ) q where dist < $dist2
   ));
-  my $rv = $query->execute($client->empire_status->{id}, $x, $x, $y, $y, $max);
+  my @bindvars = ($x, $x, $y, $y, $client->empire_status->{id});
+  $debug > 1 and emit("Running query with bindvars: @bindvars");
+  my $rv = $query->execute(@bindvars);
   for (;;) {
     my $row = $query->fetchrow_arrayref;
     last unless $row;
+    $debug > 1 and emit("Got row: @$row");
     push(@result, [ @$row ]);
   }
   return @result;
