@@ -166,13 +166,20 @@ if (@bias) {
   %ores = %backup;
 }
 
-dump_densities("Starting");
+dump_densities("Starting") if $active < $possible;
 
 sub find_value {
   my ($addition) = shift;
   my %weighted = map { ($_, ($ores{$_} + $addition->{$_}) / $bias{$_}) } @ores;
   return min(values %weighted);
 }
+
+sub find_worst {
+  my %weighted = map { ($_, $ores{$_} / $bias{$_}) } @ores;
+  return (sort { $weighted{$a} <=> $weighted{$b} } @ores)[0];
+}
+
+my $launched = 0;
 
 for my $body_id (@body_ids) {
   my $wanted = $excavators{$body_id}{max_excavators} - $active{$body_id};
@@ -184,23 +191,28 @@ for my $body_id (@body_ids) {
 
   my $status = $client->body_status($body_id);
   while (@ready && $wanted) {
-    my @planet_types = map {
-      my @density = @$_;
-      my %density = map { ($ores[$_], $density[$_]) } (0..$#ores);
-      $density{subtype} = $density[$#density];
-      \%density
-    } db_find_body_types($status->{x}, $status->{y}, $max_distance);
-    $debug and emit("Types in range: ".join(" ", map { $_->{subtype} } @planet_types));
-    $debug > 2 and emit_json("Types:", [ @planet_types ]);
-    my %values = map { ($_, find_value($_)) } @planet_types;
-    my $best_type = reduce { $values{$a} < $values{$b} ? $b : $a } @planet_types;
-    $debug > 2 and emit_json("Values for types:", [ map { ($_->{subtype}, $values{$_}) } @planet_types ]);
-    my $target = db_find_body($best_type->{subtype}, $status->{x}, $status->{y});
+    my $target;
+    if ($greedy) {
+      my @planet_types = map {
+        my @density = @$_;
+        my %density = map { ($ores[$_], $density[$_]) } (0..$#ores);
+        $density{subtype} = $density[$#density];
+        \%density
+      } db_find_body_types($status->{x}, $status->{y}, $max_distance);
+      $debug and emit("Types in range: ".join(" ", map { $_->{subtype} } @planet_types));
+      $debug > 2 and emit_json("Types:", [ @planet_types ]);
+      my %values = map { ($_, find_value($_)) } @planet_types;
+      my $best_type = reduce { $values{$a} < $values{$b} ? $b : $a } @planet_types;
+      $debug > 2 and emit_json("Values for types:", [ map { ($_->{subtype}, $values{$_}) } @planet_types ]);
+      $target = db_find_body($best_type->{subtype}, $status->{x}, $status->{y});
+    } else {
+      $target = db_find_body_for_ore($status->{x}, $status->{y}, $max_distance, find_worst());
+    }
 
     if ($target) {
       if (($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) +
           ($target->{y} - $status->{y}) * ($target->{y} - $status->{y}) > $max_distance * $max_distance) {
-        emit("Closest $best_type->{subtype} body $target->{name} at ($target->{x},$target->{y}) is too far away: ".
+        emit("Closest $target->{subtype} body $target->{name} at ($target->{x},$target->{y}) is too far away: ".
              sqrt(($target->{x} - $status->{x}) * ($target->{x} - $status->{x}) + 
                   ($target->{y} - $status->{y}) * ($target->{y} - $status->{y})),
              $body_id);
@@ -209,11 +221,12 @@ for my $body_id (@body_ids) {
         db_set_excavated_by($body_id, $target->{body_id});
         eval {
           $noaction or $client->send_ship($ready[0]{id}, { body_id => $target->{body_id} });
-          emit("Sending excavator to $best_type->{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
+          emit("Sending excavator to $target->{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
           1;
         } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
-        $ores{$_} += $best_type->{$_} for @ores;
+        $ores{$_} += $target->{$_} for @ores;
         shift(@ready);
+        $launched++;
       }
     } else {
       last;
@@ -251,7 +264,7 @@ for my $body_id (@body_ids) {
   }
 }
 
-dump_densities("Finished");
+dump_densities("Finished") if $launched;
 
 sub dump_densities {
   my $label = shift;
@@ -266,6 +279,32 @@ sub dump_densities {
   my $median = (sort { $a <=> $b } values %ores)[@ores / 2];
   my $sum = sum(values %ores);
   emit("Minimum $min, median $median, total $sum");
+}
+
+sub db_find_body_for_ore {
+  my ($x, $y, $max, $ore) = @_;
+  my @result;
+  my $ores_q = join(",", map { "o.$_ as $_" } @ores);
+  my $ores = join(",", map { "o.$_" } @ores);
+  my $dist2 = $max * $max;
+  my $result = $star_db->selectrow_hashref(qq(
+    select * from (
+      select o.x as x, o.y as y, o.body_id as body_id, o.name as name,
+             o.subtype as subtype, o.$ore as ore, $ores,
+             ((o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)) as dist
+      from orbitals o
+      left join (
+        select star_id from orbitals
+        where empire_id is not null and empire_id <> ?
+      ) s on (o.star_id = s.star_id)
+      where o.empire_id is null and o.excavated_by is null and s.star_id is null
+    ) q
+    where dist < (? * ?)
+    order by ore desc, dist
+    limit 1
+  ), {}, $x, $x, $y, $y, $client->empire_status->{id}, $max, $max);
+  emit_json("db_find_body_for_ore", $result);
+  return $result;
 }
 
 sub db_find_body_types {
@@ -324,8 +363,9 @@ sub db_find_body {
   my ($subtype, $x, $y) = @_;
   my $result;
   if ($avoid_populated) {
+    my $ores = join(",", map { "o.$_" } @ores);
     $result = $star_db->selectrow_hashref(qq(
-      select o.body_id, o.name, o.x, o.y from orbitals o
+      select o.body_id, o.name, o.x, o.y, o.subtype, $ores from orbitals o
       left join (
         select star_id from orbitals
         where empire_id is not null and empire_id <> ?
