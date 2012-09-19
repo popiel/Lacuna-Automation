@@ -20,6 +20,15 @@
 # specified max_distance), uses whichever types best balance the ore
 # distribution (possibly modified by the bias command-line argument).
 #
+# By default, for each body excavated, the body type selected maximizes
+# the minimum ore density after the new body is added in.  This will
+# tend to end up using rainbow asteroids after relative balance is
+# achieved.  For even greedier allocation, you can specify the "-greedy"
+# command line argument, and it will instead determine the ore with the
+# lowest current density, and then find a body with the highest increment
+# to that single ore.  This will tend to use a variety of different
+# planet types, frequently alternating between p11 and p12.
+#
 # If you want to have the script try to balance glyph production for a
 # small group of planets instead of your entire empire, then you can use
 # the "-body=ColonyN" argument (possibly multiple times) to specify which
@@ -117,6 +126,8 @@ $debug > 1 && emit_json("Archaeology Ministries", \%arches);
 my %excavators = map { ($_, $client->call(archaeology => view_excavators => $arches{$_}{id})) } @body_ids;
 $debug > 1 && emit_json("Excavators", \%excavators);
 
+emit("Working on bodies: ".join(", ", map { $planets->{$_} } @body_ids));
+
 my $possible = 0;
 my $active = 0;
 my %ores;
@@ -162,7 +173,7 @@ if (@bias) {
   }
   my %backup = %ores;
   %ores = %bias;
-  dump_densities("Bias");
+  dump_densities("Bias") if $active < $possible;
   %ores = %backup;
 }
 
