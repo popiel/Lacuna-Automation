@@ -299,7 +299,7 @@ sub db_find_body_for_ore {
   my @result;
   my $ores_q = join(",", map { "o.$_ as $_" } @ores);
   my $ores = join(",", map { "o.$_" } @ores);
-  my $dist2 = $max * $max;
+  my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
   my $result = $star_db->selectrow_hashref(qq(
     select * from (
       select o.x as x, o.y as y, o.body_id as body_id, o.name as name,
@@ -310,7 +310,7 @@ sub db_find_body_for_ore {
         select star_id from orbitals
         where empire_id is not null and empire_id <> ?
       ) s on (o.star_id = s.star_id)
-      where o.empire_id is null and o.excavated_by is null and s.star_id is null
+      where o.empire_id is null and o.excavated_by is null and s.star_id is null$no_station
     ) q
     where dist < (? * ?)
     order by ore desc, dist
@@ -326,6 +326,7 @@ sub db_find_body_types {
   my $ores_q = join(",", map { "o.$_ as $_" } @ores);
   my $ores = join(",", map { "o.$_" } @ores);
   my $dist2 = $max * $max;
+  my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
   my $query = $star_db->prepare(qq(
     select * from (
     select $ores_q, min((o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)) as dist, o.subtype as subtype from orbitals o
@@ -333,7 +334,7 @@ sub db_find_body_types {
       select star_id from orbitals
       where empire_id is not null and empire_id <> ?
     ) s on (o.star_id = s.star_id)
-    where o.empire_id is null and o.excavated_by is null and s.star_id is null
+    where o.empire_id is null and o.excavated_by is null and s.star_id is null$no_station
     group by $ores, o.subtype
     ) q where dist < $dist2
   ));
