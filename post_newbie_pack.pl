@@ -27,14 +27,14 @@ my $price = 0.1;
 my $max_offers = 1000;
 
 GetOptions(
-  "config=s"   => \$config_name,
-  "body=s"     => \$body_name,
-  "plans=s"    => \@plan_list,
-  "price=s"    => \$price,
-  "debug"      => \$debug,
-  "quiet"      => \$quiet,
-  "max-offers" => \$max_offers,
-  "noaction!"  => \$no_action,
+  "config=s"     => \$config_name,
+  "body=s"       => \$body_name,
+  "plans=s"      => \@plan_list,
+  "price=s"      => \$price,
+  "debug"        => \$debug,
+  "quiet"        => \$quiet,
+  "max-offers=s" => \$max_offers,
+  "noaction!"    => \$no_action,
 ) or die "$0 --config=foo.json --body=Bar --plan=Volcano --price=2\n";
 
 # $body_name ||= "UF Command";
