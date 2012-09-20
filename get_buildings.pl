@@ -33,8 +33,10 @@ for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys(%$planets)) {
   for my $building (@buildings) {
     my $key = $building->{name};
     $key .= " $building->{id}" if $key =~ $every;
-    $buildings{$key} = $building->{id};
-    $levels{$key} = $building->{level};
+    if (!$levels{$key} || $levels{$key} < $building->{level}) {
+      $buildings{$key} = $building->{id};
+      $levels{$key} = $building->{level};
+    }
   }
   for my $key (sort grep { /$name/ } keys %buildings) {
     (my $name = $key) =~ s/ \Q$buildings{$key}\E\z//;
