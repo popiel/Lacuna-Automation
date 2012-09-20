@@ -63,6 +63,7 @@ my @bias;
 my $greedy = 0;
 my $optimize = 1;
 my $avoid_populated = 0;
+my $avoid_seized = 0;
 my $noaction = 0;
 my $purge = 0;
 my $debug = 0;
@@ -78,6 +79,7 @@ GetOptions(
   "greedy!"                     => \$greedy,
   "optimize!"                   => \$optimize,
   "avoid_populated!"            => \$avoid_populated,
+  "avoid_seized!"               => \$avoid_seized,
   "noaction|dryrun|n!"          => \$noaction,
   "purge!"                      => \$purge,
   "debug|d+"                    => \$debug,
@@ -373,6 +375,7 @@ sub db_find_bodies {
 sub db_find_body {
   my ($subtype, $x, $y) = @_;
   my $result;
+  my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
   if ($avoid_populated) {
     my $ores = join(",", map { "o.$_" } @ores);
     $result = $star_db->selectrow_hashref(qq(
@@ -381,14 +384,14 @@ sub db_find_body {
         select star_id from orbitals
         where empire_id is not null and empire_id <> ?
       ) s on (o.star_id = s.star_id)
-      where o.subtype = ? and o.empire_id is null and o.excavated_by is null and s.star_id is null
+      where o.subtype = ? and o.empire_id is null and o.excavated_by is null and s.star_id is null$no_station
       order by (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)
       limit 1
     ), {}, $client->empire_status->{id}, $subtype, $x, $x, $y, $y);
   } else {
     $result = $star_db->selectrow_hashref(qq(
       select body_id, name, x, y from orbitals
-      where subtype = ? and empire_id is null and excavated_by is null
+      where subtype = ? and empire_id is null and excavated_by is null$no_station
       order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
       limit 1
     ), {}, $subtype, $x, $x, $y, $y);
