@@ -73,6 +73,8 @@ if (@offers < $max_offers) {
     }
     1;
   } or emit("Could not add trade: $@");
+} else {
+  emit("Already have $max_offers trades posted.");
 }
 
 sub emit {
