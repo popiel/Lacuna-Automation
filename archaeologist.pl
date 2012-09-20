@@ -121,8 +121,8 @@ my %arches = map { ($_, scalar(eval { $client->find_building($_, "Archaeology Mi
 my %ports  = map { ($_, scalar(eval { $client->find_building($_, "Space Port"          ) } )) } @body_ids;
 my %yards  = map { ($_, scalar(eval { $client->find_building($_, "Shipyard"            ) } )) } @body_ids;
 
-# Filter down to just those bodies with archaeology ministries, spaceports, and shipyards
-my @body_ids = grep { ref($arches{$_}) eq 'HASH' && ref($ports{$_}) eq 'HASH' && ref($yards{$_}) eq 'HASH' } @body_ids;
+# Filter down to just those bodies with archaeology ministries, spaceports, and (if building) shipyards
+my @body_ids = grep { ref($arches{$_}) eq 'HASH' && ref($ports{$_}) eq 'HASH' && ( $max_build_time == 0 || ref($yards{$_}) eq 'HASH' ) } @body_ids;
 $debug > 1 && emit_json("Pruned body_ids", \@body_ids);
 $debug > 1 && emit_json("Archaeology Ministries", \%arches);
 my %excavators = map { ($_, $client->call(archaeology => view_excavators => $arches{$_}{id})) } @body_ids;
@@ -246,7 +246,7 @@ for my $body_id (@body_ids) {
     }
   }
 
-  if ($wanted) {
+  if ($wanted && $max_build_time > 0) {
     my @yards = $client->find_building($body_id, "Shipyard");
     $_->{buildable} = $client->yard_buildable($_->{id}) for @yards;
     for my $yard (@yards) {
