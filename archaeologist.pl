@@ -132,6 +132,8 @@ emit("Working on bodies: ".join(", ", map { $planets->{$_} } @body_ids));
 
 my $possible = 0;
 my $active = 0;
+my $travelling = 0;
+my $building = 0;
 my %ores;
 my @ores;
 my %active;
@@ -152,17 +154,21 @@ for my $body_id (@body_ids) {
   my $port = $client->find_building($body_id, "Space Port");
   my $ships = $client->port_all_ships($body_id);
   my @excavators = grep { $_->{type} eq "excavator" } @{$ships->{ships}};
+  $building += grep { $_->{task} eq "Building" } @excavators;
   my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
   for my $excavator (@travelling) {
     db_set_excavated_by($body_id, $excavator->{to}{id});
     $excavator->{body}{ore} = db_lookup_ores($excavator->{to}{id});
     $active++;
+    $travelling++;
     $active{$body_id}++;
     for my $ore (keys(%{$excavator->{body}{ore}})) {
       $ores{$ore} += $excavator->{body}{ore}{$ore};
     }
   }
 }
+
+emit("$possible excavators possible, $active active ($travelling travelling, ".($active - $travelling)." on site), $building building");
 
 my %bias = map { ($_, 1) } @ores;
 if (@bias) {
@@ -175,11 +181,11 @@ if (@bias) {
   }
   my %backup = %ores;
   %ores = %bias;
-  dump_densities("Bias") if $active < $possible;
+  dump_densities("Bias") if $noaction || $active < $possible;
   %ores = %backup;
 }
 
-dump_densities("Starting") if $active < $possible;
+dump_densities("Starting") if $noaction || $active < $possible;
 
 sub find_value {
   my ($addition) = shift;
