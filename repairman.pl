@@ -43,8 +43,21 @@ $body_name = $client->body_status($body_id)->{name};
 
 my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
 
+my @cost;
 for my $building (@buildings) {
   next if $building->{efficiency} == 100;
+  my $view = $client->building_view($building->{url}, $building->{id})->{building};
+  my $cost = List::Util::sum( values %{ $view->{repair_costs} } );
+  if ( $cost == 0 || $building->{url} =~ /platform/) {
+    $client->building_repair($building->{url}, $building->{id});
+    emit("Repaired $building->{name} from $building->{efficiency}%");
+  }
+  else {
+    push @cost, [ $building, $cost ];
+  }
+}
+
+for my $building ( map $_->[0], sort { $b->[1] <=> $a->[1] } @cost ) {
   $client->building_repair($building->{url}, $building->{id});
   emit("Repaired $building->{name} from $building->{efficiency}%");
 }
