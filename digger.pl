@@ -44,8 +44,7 @@ if ((@body_ids != @body_names)) {
 @body_names = map { $planets->{$_} } @body_ids;
 
 my %arches = map { ($_, scalar(eval { $client->find_building($_, "Archaeology Ministry") } )) } @body_ids;
-
-@body_ids = grep { $arches{$_} } @body_ids;
+@body_ids = grep { $arches{$_} && $arches{$_}{level} } @body_ids;
 
 emit("Looking at bodies ".join(', ', @body_names));
 
