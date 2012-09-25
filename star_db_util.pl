@@ -244,6 +244,7 @@ if ($opts{'all-sectors'}) {
         process_star($star);
       }
     }
+    $star_db->commit;
   }
 }
 elsif ( ! $opts{'no-fetch'} ) {
@@ -328,6 +329,7 @@ elsif ( ! $opts{'no-fetch'} ) {
     for my $star (@stars) {
       process_star($star);
     }
+    $star_db->commit;
   }
 }
 
@@ -370,27 +372,24 @@ elsif ( ! $opts{'no-fetch'} ) {
         my $sql = 'select id from stars where ' . join(' and ', @and) . ' order by ' . $dist;
         my $star_ids_sth = $star_db->prepare($sql);
         $star_ids_sth->execute();
-        my @stars;
         while ( my ($star_id) = $star_ids_sth->fetchrow_array ) {
           last if --$oracle_rpc < 0;
           my $get_star = eval { $client->call('oracleofanid', 'get_star', $oracle, $star_id) };
           if ($get_star) {
-            push @stars, $get_star->{star};
+            my $star = $get_star->{star};
+            $probed{$star->{id}}++;
+            process_star($star);
+            $star_db->commit;
           }
-        }
-        for my $star (@stars) {
-          $probed{$star->{id}}++;
-          process_star($star);
         }
       }
     }
   }
 }
 
-$star_db->commit;
 
 # SQLite can't vacuum in a transaction
-    unless ($opts{'no-vacuum'}) {
+unless ($opts{'no-vacuum'}) {
     verbose("Vacuuming database\n");
     $star_db->{AutoCommit} = 1;
     $star_db->do('vacuum');
