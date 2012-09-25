@@ -22,13 +22,13 @@ my $do_plans;
 my $do_glyphs;
 my $do_tyleon;
 my $do_sculpture;
-my $dry_run;
+my $noaction;
 
 GetOptions(
   "config=s"    => \$config_name,
   "body=s"      => \@body_name,
   "stay!"       => \$stay,
-  "dry-run!"    => \$dry_run,
+  "noaction!"    => \$noaction,
   "debug"       => \$debug,
   "glyphs!"     => \$do_glyphs,
   "plans!"      => \$do_plans,
@@ -136,7 +136,7 @@ for my $ship (@ships) {
   }
   if (@items) {
     emit("Sending $pc plans and $gc glyphs to $planets->{$body_id[1]} on $ship->{name}", $planets->{$body_id[0]});
-    if ($dry_run) {
+    if ($noaction) {
       use Data::Dumper;
       emit( Data::Dumper->new([\@items])->Terse(1)->Sortkeys(1)->Dump() );
     }
