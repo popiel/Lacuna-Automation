@@ -35,6 +35,7 @@ GetOptions(
   "tyleon!"     => \$do_tyleon,
   "sculpture!"  => \$do_sculpture,
   "quiet"       => \$quiet,
+  "ship=s"        => \$ship_name,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 if (!$do_glyphs && !$do_plans && !$do_tyleon) {
@@ -51,7 +52,7 @@ if (defined($do_plans) && !defined($do_sculpture)) {
 }
 
 die "Must specify two bodies\n" unless @body_name == 2;
-$ship_name ||= join(" ", @body_name);
+#$ship_name ||= join(" ", @body_name);
 
 my $client = Client->new(config => $config_name);
 my $planets = $client->empire_status->{planets};
@@ -93,7 +94,7 @@ my $glyphs;
 if ($do_plans || $do_tyleon || $do_sculpture) {
   $plans  = $client->body_plans($body_id[0]);
   @plans = @{$plans->{plans}};
-  @plans = grep { $_->{name} ne "Halls of Vrbansk" } @plans;
+  @plans = grep { $_->{name} !~ /^Halls of Vrbansk\z|Platform\z/ } @plans;
   @plans = grep { $_->{name} !~ /Tyleon/ } @plans unless $do_tyleon;
   @plans = grep { $_->{name} !~ /Sculpture/ } @plans unless $do_sculpture;
   @plans = grep { $_->{name} =~ /Tyleon|Sculpture/ } @plans unless $do_plans;
@@ -107,7 +108,7 @@ if ($do_glyphs) {
 exit(0) unless @plans || @glyphs;
 
 my $ships = $client->call(trade => get_trade_ships => $trade[0]{id}, $body_id[1]);
-my @ships = grep($_->{name} !~ /(Alpha|Beta)$/ && $_->{task} eq "Docked" && $_->{hold_size} > 10, @{$ships->{ships}});
+my @ships = grep($_->{name} !~ /(Alpha|Beta)$/ && $_->{task} eq "Docked" && $_->{hold_size} > 10 && ( ! $ship_name || $_->{name} =~ $ship_name ), @{$ships->{ships}});
 
 for my $ship (@ships) {
   my $space = $ship->{hold_size};
