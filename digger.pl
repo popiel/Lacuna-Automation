@@ -48,7 +48,7 @@ my %arches = map { ($_, scalar(eval { $client->find_building($_, "Archaeology Mi
 
 emit("Looking at bodies ".join(', ', @body_names));
 
-exit(0) unless grep { !($_->{work}{end}) || Client::parse_time($_->{work}{end}) < time() } values(%arches);
+exit(0) unless $noaction || grep { $_ && !($_->{work}{end} && Client::parse_time($_->{work}{end}) >= time()) } values(%arches);
 
 my %glyphs;
 for my $body_id (@body_ids) {
