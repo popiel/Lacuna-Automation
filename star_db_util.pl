@@ -363,11 +363,9 @@ elsif ( ! $opts{'no-fetch'} ) {
         if ($opts{'oracle-max-dist'} && $opts{'oracle-max-dist'} < $max_dist) {
           $max_dist = $opts{'oracle-max-dist'};
         }
+        push @and, "$dist < @{[$max_dist**2]}";
         if ($opts{'oracle-min-dist'}) {
-          push @and, "$dist between @{[$opts{'oracle-min-dist'}**2]} and @{[$max_dist**2]}";
-        }
-        else {
-          push @and, "$dist <= @{[$max_dist**2]}";
+          push @and, "$dist >= @{[$opts{'oracle-min-dist'}**2]}";
         }
         my $sql = 'select id from stars where ' . join(' and ', @and) . ' order by ' . $dist;
         my $star_ids_sth = $star_db->prepare($sql);
@@ -421,6 +419,7 @@ sub process_star {
       $body->{body_id} = $body->{id};
       if (my $row = orbital_exists($body->{x}, $body->{y})) {
         if ((($row->{type}||q{}) ne $body->{type})
+            or (($row->{image}||q{}) ne $body->{image})
             or (($row->{body_id}||q{}) ne $body->{body_id})
             or (($row->{name}||q{}) ne $body->{name})
             or ($body->{empire} and ($row->{empire_id}||q{}) ne $body->{empire}{id})
@@ -500,7 +499,7 @@ sub ore_types {
     sub orbital_exists {
         my ($x, $y) = @_;
 
-        $check_orbital ||= $star_db->prepare(q{select *, strftime('%s',last_checked) checked_epoch from orbitals where x = ? and y = ?});
+        $check_orbital ||= $star_db->prepare(q{select *, strftime('%s',last_checked) checked_epoch, subtype||'-'||orbit image from orbitals where x = ? and y = ?});
         $check_orbital->execute($x, $y);
         return $check_orbital->fetchrow_hashref;
     }
