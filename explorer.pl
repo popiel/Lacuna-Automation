@@ -119,7 +119,7 @@ for my $body_id (@body_ids) {
   my @ready = grep { $_->{task} eq "Docked" } @probes;
   $debug > 1 and emit_json("Ready probes for $body_id", \@probes);
 
-  my $delta = $wanted - @probes;
+  my $delta = $wanted - @ready;
   ship_build($body_id, "probe", $delta, $max_build_time);
 
   for my $probe (@ready) {
