@@ -49,6 +49,7 @@ my $lottery;
 
 for (;;) {
   my @trash;
+  my @archive;
   my $inbox = $client->mail_inbox();
   emit_json("inbox result", $inbox) if $debug;
   for my $message (@{$inbox->{messages}}) {
@@ -76,6 +77,30 @@ for (;;) {
       emit("Trashing $message->{id}") if $debug;
       push(@trash, $message->{id});
     }
+    if ($client->{email_forward} && grep(/Correspondence/, @{$message->{tags}})) {
+      emit("Forwarding to real mail: [$message->{from}] $message->{subject}");
+      my $detail = $client->call(inbox => read_message => $message->{id});
+      open(MAIL, "|-", "mail", "-s", "[Lacuna] [$message->{from}] $message->{subject}", $client->{email_forward}) || die "Couldn't send email";
+      my $text = $detail->{message}{body};
+      $text =~ s/\\n/\n/g;
+      print MAIL $text;
+      close(MAIL);
+      push(@archive, $message->{id});
+      # forward
+    }
+    if (grep(/Probe/, @{$message->{tags}}) && !$message->{has_read}) {
+      my $detail = $client->call(inbox => read_message => $message->{id});
+      if ($detail->{message}{body} =~ /\{Empire \d+ (last)\}/) {
+        emit("Trashing $message->{id}") if $debug;
+        push(@trash, $message->{id});
+      }
+    }
+    
+  }
+  if (@archive) {
+    my $result = $client->mail_archive(\@archive);
+    my $count = @{$result->{success}};
+    emit("Archived $count inbox messages.");
   }
   last unless @trash;
 

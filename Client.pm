@@ -70,7 +70,7 @@ sub read_config {
   my $self = shift;
   croak "config not specified for Client" unless $self->{config};
   my $config = $self->read_json($self->{config}, "config");
-  for my $key (qw(empire_name empire_password uri api_key cache_root captcha_program)) {
+  for my $key (qw(empire_name empire_password uri api_key cache_root captcha_program email_forward)) {
     $self->{$key} = $config->{$key} if exists($config->{$key});
 #    warn "$key: $self->{$key}\n";
   }
@@ -1066,6 +1066,15 @@ sub mail_trash {
   my $message_ids = shift;
 
   my $result = $self->call( inbox => trash_messages => $message_ids);
+  $self->cache_invalidate( type => 'mail_inbox' );
+  return $result;
+}
+
+sub mail_archive {
+  my $self = shift;
+  my $message_ids = shift;
+
+  my $result = $self->call( inbox => archive_messages => $message_ids);
   $self->cache_invalidate( type => 'mail_inbox' );
   return $result;
 }
