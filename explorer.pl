@@ -112,17 +112,18 @@ for my $body_id (@body_ids) {
 
 for my $body_id (@body_ids) {
   my $stars = $stars{$body_id};
-  my $wanted = $obs{$body_id}{level} * 3 - $stars->{star_count};
+  my $wanted = $stars->{max_probes} - $stars->{star_count} - $stars->{travelling};
 
   $debug > 1 and emit_json("All ships for $body_id", $ships{$body_id}{ships});
   my @probes = grep { $_->{type} eq "probe" } @{$ships{$body_id}{ships}};
   my @ready = grep { $_->{task} eq "Docked" } @probes;
   $debug > 1 and emit_json("Ready probes for $body_id", \@probes);
 
-  my $delta = $wanted - @probes;
+  my $delta = $wanted - @ready;
   ship_build($body_id, "probe", $delta, $max_build_time);
 
   for my $probe (@ready) {
+    last unless --$wanted >= 0;
     my $target = db_find_target($body_id);
     $claimed{$target->{id}} = $probe; # Do this immediately to prevent duplicate scans
     eval {
