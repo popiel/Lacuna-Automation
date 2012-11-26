@@ -243,8 +243,8 @@ if ($opts{'all-sectors'}) {
       for my $star ( @{ $client->map_get_stars( $x, -1500, $x, 1500 )->{'stars'} } ) {
         process_star($star);
       }
+      $star_db->commit;
     }
-    $star_db->commit;
   }
 }
 elsif ( ! $opts{'no-fetch'} ) {
