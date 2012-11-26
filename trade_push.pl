@@ -64,6 +64,7 @@ exit(0) unless $ship;
 
 my $items;
 if ($cargo =~ /^\{/) {
+  # e.g. --cargo '{"quantity":6,"type":"ship","name":"Probe 30","ship_type":"probe","hold_size":0,"berth_level":1,"speed":22550,"size":50000}'
   $cargo = decode_json($cargo);
   $items = [ map { { type => $_, quantity => $cargo->{$_} } } keys %$cargo ];
 }
