@@ -66,13 +66,14 @@ for (;;) {
       push(@trash, $message->{id});
     }
     if (grep(/Excavator/, @{$message->{tags}}) &&
-        $message->{subject} =~ /Excavator Results/) {
+        $message->{subject} =~ /Excavator Results|Excavator Deployed/) {
       my $detail = $client->call(inbox => read_message => $message->{id});
       my @replacements = grep { $_->[1] eq "Replace" && $_->[2] !~ /^Fail/ } @{$detail->{message}{attachments}{table}};
-      if (@replacements) {
+      if (@replacements || $detail->{message}{body} =~ /It is now operational and will start sending back its results/) {
         my $body_id = ($detail->{message}{body} =~ /\{Planet (\d+)/);
         emit("Excavator replacement for ".join(", ", map { $_->[0] } @replacements)."; invalidating ship list.", $body_id);
         $client->cache_invalidate( type => 'spaceport_view_all_ships', id => $body_id );
+        $client->cache_invalidate( type => 'excavators',               id => $body_id );
       }
       emit("Trashing $message->{id}") if $debug;
       push(@trash, $message->{id});
@@ -90,7 +91,7 @@ for (;;) {
     }
     if (grep(/Probe/, @{$message->{tags}}) && !$message->{has_read}) {
       my $detail = $client->call(inbox => read_message => $message->{id});
-      if ($detail->{message}{body} =~ /\{Empire \d+ (last)\}/) {
+      if ($detail->{message}{body} =~ /\{Empire \d+ (last|kiamo)\}/) {
         emit("Trashing $message->{id}") if $debug;
         push(@trash, $message->{id});
       }
