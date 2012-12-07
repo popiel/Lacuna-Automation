@@ -48,7 +48,8 @@ for my $building (@buildings) {
   next if $building->{efficiency} == 100;
   my $view = $client->building_view($building->{url}, $building->{id})->{building};
   my $cost = List::Util::sum( values %{ $view->{repair_costs} } );
-  if ( $cost == 0 || $building->{url} =~ /platform/) {
+  #if ( $cost == 0 || $building->{url} =~ /platform/) {
+  if ( $cost == 0 ) {
     $client->building_repair($building->{url}, $building->{id});
     emit("Repaired $building->{name} from $building->{efficiency}%");
   }
@@ -57,7 +58,7 @@ for my $building (@buildings) {
   }
 }
 
-for my $building ( map $_->[0], sort { $b->[1] <=> $a->[1] } @cost ) {
+for my $building ( map $_->[0], sort { $a->[1] <=> $b->[1] } @cost ) {
   $client->building_repair($building->{url}, $building->{id});
   emit("Repaired $building->{name} from $building->{efficiency}%");
 }
