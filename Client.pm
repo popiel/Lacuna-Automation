@@ -596,6 +596,33 @@ sub body_plans {
   return $result;
 }
 
+sub view_excavators {
+  my $self = shift;
+  my $body_id = shift;
+
+  my $result = $self->cache_read( type => 'excavators', id => $body_id );
+  return $result if $result;
+
+  # Trade and transporter are preferred because of the inclusion of cargo size
+  # The last one is not in an eval so that fundamental exceptions (e.g. login failure) propagate
+  $result = $self->call(archaeology => view_excavators => scalar($self->find_building($body_id, "Archaeology Ministry"))->{id});
+
+  my @travelling;
+  if ($result->{travelling}) {
+    my $ships = $self->port_all_ships($body_id);
+    @travelling = grep { $_->{type} eq "excavator" && $_->{task} eq "Travelling" } @{$ships->{ships}};
+    if ($result->{travelling} != @travelling) {
+      $self->cache_invalidate( type => 'spaceport_view_all_ships',  id => $body_id );
+      my $ships = $self->port_all_ships($body_id);
+      @travelling = grep { $_->{type} eq "excavator" && $_->{task} eq "Travelling" } @{$ships->{ships}};
+    }
+  }
+  my @arrivals = map { parse_time($_->{date_arrives}) } @travelling;
+  my $invalid = List::Util::min(time() + (23 * 3600), @arrivals);
+  $self->cache_write( type => 'excavators', id => $body_id, data => $result, invalid => $invalid );
+  return $result;
+}
+
 sub glyph_list {
   my $self = shift;
   my $body_id = shift;
@@ -1128,6 +1155,7 @@ sub present_captcha {
         spy_list                     => 'body/%d/spy_list',
         plans                        => 'body/%d/plans',
         glyphs                       => 'body/%d/glyphs',
+        excavators                   => 'body/%d/excavators',
         building_view                => 'building/%d/view',
         building_stats               => 'building/%d/stats_%d',
         spaceport_view_all_ships     => 'body/%d/view_all_ships',
