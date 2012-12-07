@@ -224,7 +224,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
     for my $id (keys %{$buildings->{buildings}}) {
       my $building = $buildings->{buildings}{$id};
       print "Matching against $building->{level} $building->{name}\n" if $debug;
-      if ($building->{name} eq $name && (!$level || $building->{level} == $level)) {
+      if ($building->{name} eq $name && (!$level || $building->{level} == $level) && $building->{level} < 30) {
         $building->{id} = $id;
         my $message = upgrade_check($building, 1);
         if ($message) {
