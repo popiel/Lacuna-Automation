@@ -46,7 +46,7 @@ sub read_json {
   }
   my $json = do { local $/; <$file> };
   close($file);
-  my $result = decode_json($json);
+  my $result = eval { decode_json($json) };
   return $result;
 }
 

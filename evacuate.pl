@@ -150,6 +150,10 @@ for my $ship (@ships) {
   }
 }
 
+if (@glyphs || @plans) {
+  emit(sprintf("Not sending %d plans and %d glyphs", List::Util::sum(map $_->{quantity}, @plans), List::Util::sum(map $_->{quantity}, @plans)));
+}
+
 sub emit {
   my $message = shift;
   my $name = shift;

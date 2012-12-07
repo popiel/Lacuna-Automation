@@ -38,7 +38,7 @@ GetOptions(
 ) or die "$0 --config=foo.json --body=Bar --plan=Volcano --price=2\n";
 
 # $body_name ||= "UF Command";
-@plan_list or @plan_list = split(", ", q(Algae Pond, Amalgus Meadow, Beeldeban Nest, Denton Brambles, Lapis Forest, Malcud Field, Natural Spring, Geo Thermal Vent, Volcano, Interdimensional Rift, Kalavian Ruins));
+@plan_list or @plan_list = split(", ", q(Algae Pond, Amalgus Meadow, Beeldeban Nest, Denton Brambles, Lapis Forest, Malcud Field, Natural Spring, Geo Thermal Vent, Volcano, Interdimensional Rift, Kalavian Ruins, Ravine));
 
 my $client = Client->new(config => $config_name);
 
