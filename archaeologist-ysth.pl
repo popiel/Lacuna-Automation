@@ -64,6 +64,7 @@ my $greedy = 0;
 my $optimize = 1;
 my $avoid_populated = 0;
 my $avoid_seized = 0;
+my $avoid_small = 0;
 my $noaction = 0;
 my $purge = 0;
 my $debug = 0;
@@ -80,6 +81,7 @@ GetOptions(
   "optimize!"                   => \$optimize,
   "avoid_populated!"            => \$avoid_populated,
   "avoid_seized!"               => \$avoid_seized,
+  "avoid_small_bodies!"         => \$avoid_small,
   "noaction|dryrun|n!"          => \$noaction,
   "purge!"                      => \$purge,
   "debug|d+"                    => \$debug,
@@ -306,6 +308,7 @@ sub db_find_body_for_ore {
   my $ores_q = join(",", map { "o.$_ as $_" } @ores);
   my $ores = join(",", map { "o.$_" } @ores);
   my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
+  my $no_small = ( $avoid_small ? " and o.subtype not in ('p33','a5','a6','a7','a8','a9','a10','a11','a12','a13','a14','a15','a16','a17','a18','a19','a20','debris1','a22','a23','a24','a26','a26')" : '' );
   my $result = $star_db->selectrow_hashref(qq(
     select * from (
       select o.x as x, o.y as y, o.body_id as body_id, o.name as name,
@@ -316,7 +319,7 @@ sub db_find_body_for_ore {
         select star_id from orbitals
         where empire_id is not null and empire_id <> ?
       ) s on (o.star_id = s.star_id)
-      where o.empire_id is null and o.excavated_by is null and o.type in ('asteroid','habitable planet') and s.star_id is null$no_station
+      where o.empire_id is null and o.excavated_by is null and o.type in ('asteroid','habitable planet') and s.star_id is null$no_small$no_station
     ) q
     where dist < (? * ?)
     order by ore desc, dist
@@ -333,6 +336,7 @@ sub db_find_body_types {
   my $ores = join(",", map { "o.$_" } @ores);
   my $dist2 = $max * $max;
   my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
+  my $no_small = ( $avoid_small ? " and o.subtype not in ('p33','a5','a6','a7','a8','a9','a10','a11','a12','a13','a14','a15','a16','a17','a18','a19','a20','debris1','a22','a23','a24','a26','a26')" : '' );
   my $query = $star_db->prepare(qq(
     select * from (
     select $ores_q, min((o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)) as dist, o.subtype as subtype from orbitals o
@@ -340,7 +344,7 @@ sub db_find_body_types {
       select star_id from orbitals
       where empire_id is not null and empire_id <> ?
     ) s on (o.star_id = s.star_id)
-    where o.empire_id is null and o.excavated_by is null and o.type in ('asteroid','habitable planet') and s.star_id is null$no_station
+    where o.empire_id is null and o.excavated_by is null and o.type in ('asteroid','habitable planet') and s.star_id is null$no_small$no_station
     group by o.subtype
     ) q where dist < $dist2
   ));
