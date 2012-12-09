@@ -18,11 +18,13 @@ autoflush STDERR 1;
 my $config_name = "config.json";
 my @body_names;
 my @types;
+my $quiet;
 
 GetOptions(
   "config=s"  => \$config_name,
   "body|b=s"  => \@body_names,
   "type|name=s" => \@types,
+  "quiet" => \$quiet,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
@@ -56,7 +58,7 @@ my @valid = qw(
 
 for my $body_id (@body_ids) {
   for my $type (@types) {
-    emit("Invalidating $type", $body_id);
+    emit("Invalidating $type", $body_id) if !$quiet;
     $client->cache_invalidate(type => $type, id => $body_id);
   }
 }
