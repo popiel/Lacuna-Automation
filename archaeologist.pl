@@ -64,6 +64,7 @@ my $greedy = 0;
 my $optimize = 1;
 my $avoid_populated = 0;
 my $avoid_seized = 0;
+my $avoid_small = 0;
 my $noaction = 0;
 my $purge = 0;
 my $debug = 0;
@@ -80,6 +81,7 @@ GetOptions(
   "optimize!"                   => \$optimize,
   "avoid_populated!"            => \$avoid_populated,
   "avoid_seized!"               => \$avoid_seized,
+  "avoid_small_bodies!"         => \$avoid_small,
   "noaction|dryrun|n!"          => \$noaction,
   "purge!"                      => \$purge,
   "debug|d+"                    => \$debug,
@@ -144,11 +146,10 @@ for my $body_id (@body_ids) {
   $active{$body_id}--;
   for my $excavator (@{$excavators{$body_id}{excavators}}) {
     db_set_excavated_by($body_id, $excavator->{body}{id});
+    ($excavator->{body}{subtype} = $excavator->{body}{image}) =~ s/-.*//;
     $active++;
     $active{$body_id}++;
-    for my $ore (keys(%{$excavator->{body}{ore}})) {
-      $ores{$ore} += $excavator->{body}{ore}{$ore};
-    }
+    add_ores(\%ores, $arches{$body_id}, $excavator->{body}{ore}, $excavator->{body}{subtype}, $excavator->{glyph}, $excavator->{id} == 0);
   }
   @ores = sort keys %ores;
   my $port = $client->find_building($body_id, "Space Port");
@@ -158,13 +159,11 @@ for my $body_id (@body_ids) {
   my @travelling = grep { $_->{task} eq "Travelling" } @excavators;
   for my $excavator (@travelling) {
     db_set_excavated_by($body_id, $excavator->{to}{id});
-    $excavator->{body}{ore} = db_lookup_ores($excavator->{to}{id});
+    ( $excavator->{body}{ore}, $excavator->{body}{subtype} ) = db_lookup_ores($excavator->{to}{id});
     $active++;
     $travelling++;
     $active{$body_id}++;
-    for my $ore (keys(%{$excavator->{body}{ore}})) {
-      $ores{$ore} += $excavator->{body}{ore}{$ore};
-    }
+    add_ores(\%ores, $arches{$body_id}, $excavator->{body}{ore}, $excavator->{body}{subtype});
   }
 }
 
@@ -188,8 +187,11 @@ if (@bias) {
 dump_densities("Starting") if $noaction || $active < $possible;
 
 sub find_value {
-  my ($addition) = shift;
-  my %weighted = map { ($_, ($ores{$_} + $addition->{$_}) / $bias{$_}) } @ores;
+  my ($addition, $arch_min) = shift;
+  my %weighted = %ores;
+  add_ores(\%weighted, $arch_min, { map { $_, $addition->{$_} } @ores }, $addition->{subtype});
+  $weighted{$_} /= $bias{$_} for @ores;
+
   return min(values %weighted);
 }
 
@@ -243,7 +245,7 @@ for my $body_id (@body_ids) {
           emit("Sending excavator to $target->{subtype}: $target->{name} at ($target->{x},$target->{y})", $body_id);
           1;
         } or emit("Couldn't send excavator to $target->{name}: $@", $body_id);
-        $ores{$_} += $target->{$_} for @ores;
+        add_ores(\%ores, $arches{$body_id}, { map { $_, $target->{$_} } @ores }, $target->{subtype});
         shift(@ready);
         $launched++;
       }
@@ -294,9 +296,9 @@ sub dump_densities {
                           $ores{$ores[$_ + 5]}, $ores[$_ + 5],
                           $ores{$ores[$_ + 10]}, $ores[$_ + 10],
                           $ores{$ores[$_ + 15]}, $ores[$_ + 15]) } (0..4)));
-  my $min = min(values %ores);
-  my $median = (sort { $a <=> $b } values %ores)[@ores / 2];
-  my $sum = sum(values %ores);
+  my $min = sprintf '%.1f', min(values %ores);
+  my $median = sprintf '%.1f', (sort { $a <=> $b } values %ores)[@ores / 2];
+  my $sum = sprintf '%.1f', sum(values %ores);
   emit("Minimum $min, median $median, total $sum");
 }
 
@@ -306,6 +308,7 @@ sub db_find_body_for_ore {
   my $ores_q = join(",", map { "o.$_ as $_" } @ores);
   my $ores = join(",", map { "o.$_" } @ores);
   my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
+  my $no_small = ( $avoid_small ? " and o.subtype not in ('p33','a5','a6','a7','a8','a9','a10','a11','a12','a13','a14','a15','a16','a17','a18','a19','a20','debris1','a22','a23','a24','a26','a26')" : '' );
   my $result = $star_db->selectrow_hashref(qq(
     select * from (
       select o.x as x, o.y as y, o.body_id as body_id, o.name as name,
@@ -316,7 +319,7 @@ sub db_find_body_for_ore {
         select star_id from orbitals
         where empire_id is not null and empire_id <> ?
       ) s on (o.star_id = s.star_id)
-      where o.empire_id is null and o.excavated_by is null and s.star_id is null$no_station
+      where o.empire_id is null and o.excavated_by is null and o.type in ('asteroid','habitable planet') and s.star_id is null$no_small$no_station
     ) q
     where dist < (? * ?)
     order by ore desc, dist
@@ -333,6 +336,7 @@ sub db_find_body_types {
   my $ores = join(",", map { "o.$_" } @ores);
   my $dist2 = $max * $max;
   my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
+  my $no_small = ( $avoid_small ? " and o.subtype not in ('p33','a5','a6','a7','a8','a9','a10','a11','a12','a13','a14','a15','a16','a17','a18','a19','a20','debris1','a22','a23','a24','a26','a26')" : '' );
   my $query = $star_db->prepare(qq(
     select * from (
     select $ores_q, min((o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)) as dist, o.subtype as subtype from orbitals o
@@ -340,8 +344,8 @@ sub db_find_body_types {
       select star_id from orbitals
       where empire_id is not null and empire_id <> ?
     ) s on (o.star_id = s.star_id)
-    where o.empire_id is null and o.excavated_by is null and s.star_id is null$no_station
-    group by $ores, o.subtype
+    where o.empire_id is null and o.excavated_by is null and o.type in ('asteroid','habitable planet') and s.star_id is null$no_small$no_station
+    group by o.subtype
     ) q where dist < $dist2
   ));
   my @bindvars = ($x, $x, $y, $y, $client->empire_status->{id});
@@ -356,35 +360,12 @@ sub db_find_body_types {
   return @result;
 }
 
-sub db_find_bodies {
-  my ($x, $y, $max) = @_;
-  my @result;
-  my $ores = join(",", map { "o.$_" } @ores);
-  my $query = $star_db->prepare(qq(
-    select o.body_id, o.name, o.x, o.y, o.subtype, $ores from orbitals o
-    left join (
-      select star_id from orbitals
-      where empire_id is not null and empire_id <> ?
-    ) s on (o.star_id = s.star_id)
-    where o.empire_id is null and o.excavated_by is null and s.star_id is null
-      and (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?) < ?
-    order by (o.x - ?) * (o.x - ?) + (o.y - ?) * (o.y - ?)
-  ));
-  my $rv = $query->execute($client->empire_status->{id}, $x, $x, $y, $y, $max, $x, $x, $y, $y);
-  for (;;) {
-    my $row = $query->fetchrow_hashref;
-    last unless $row;
-    push(@result, $row);
-  }
-  return @result;
-}
-
 sub db_find_body {
   my ($subtype, $x, $y) = @_;
   my $result;
   my $no_station = ( $avoid_seized ? ' and o.station_id is null' : '' );
+  my $ores = join(",", map { "o.$_" } @ores);
   if ($avoid_populated) {
-    my $ores = join(",", map { "o.$_" } @ores);
     $result = $star_db->selectrow_hashref(qq(
       select o.body_id, o.name, o.x, o.y, o.subtype, $ores from orbitals o
       left join (
@@ -397,7 +378,7 @@ sub db_find_body {
     ), {}, $client->empire_status->{id}, $subtype, $x, $x, $y, $y);
   } else {
     $result = $star_db->selectrow_hashref(qq(
-      select body_id, name, x, y from orbitals
+      select o.body_id, o.name, o.x, o.y, o.subtype, $ores from orbitals o
       where subtype = ? and empire_id is null and excavated_by is null$no_station
       order by (x - ?) * (x - ?) + (y - ?) * (y - ?)
       limit 1
@@ -411,11 +392,12 @@ sub db_find_body {
 
 sub db_lookup_ores {
   my ($body_id) = @_;
-  my $result = $star_db->selectrow_hashref("select ".join(",", @ores)." from orbitals where body_id = ?", {}, $body_id);
+  my $result = $star_db->selectrow_hashref("select ".join(",", @ores).",subtype from orbitals where body_id = ?", {}, $body_id);
+  my $subtype = delete $result->{subtype};
   if ($debug > 1) {
     emit_json("Lookup ores: select ".join(",", @ores)." from orbitals where body_id = $body_id", $result);
   }
-  return $result;
+  return ($result, $subtype);
 }
 
 sub db_clear_excavated_by {
@@ -456,4 +438,26 @@ sub emit_json {
   my $hash = shift;
   print Client::format_time(time())." $message:\n";
   print JSON::XS->new->allow_nonref->canonical->pretty->encode($hash);
+}
+
+sub add_ores {
+    my ($ores, $arch_min, $add_ores, $subtype, $glyph_percent, $own_body) = @_;
+
+    # cyclical; disregard last taken observation (including glyph %)
+    if ($subtype eq 'p33') {
+        $add_ores = { map { $_, 468.6 } keys %$add_ores };
+        $glyph_percent = 0;
+    }
+
+    my $total_ore = sum(values %$add_ores);
+
+    # calculate if not provided
+    $glyph_percent ||= int( ($own_body ? 2 : 1) * $arch_min->{level} * max(10000, $total_ore) / 20000) + 1;
+
+    for my $ore (keys %$add_ores) {
+        # 16 is a typical good gylph percent; scale for that
+        $ores->{$ore} += $glyph_percent / 16 * $add_ores->{$ore} * 10000 / $total_ore;
+    }
+
+    return;
 }
