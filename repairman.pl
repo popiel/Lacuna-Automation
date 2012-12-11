@@ -48,7 +48,6 @@ for my $building (@buildings) {
   next if $building->{efficiency} == 100;
   my $view = $client->building_view($building->{url}, $building->{id})->{building};
   my $cost = List::Util::sum( values %{ $view->{repair_costs} } );
-  #if ( $cost == 0 || $building->{url} =~ /platform/) {
   if ( $cost == 0 ) {
     $client->building_repair($building->{url}, $building->{id});
     emit("Repaired $building->{name} from $building->{efficiency}%");
@@ -58,9 +57,31 @@ for my $building (@buildings) {
   }
 }
 
-for my $building ( map $_->[0], sort { $a->[1] <=> $b->[1] } @cost ) {
-  $client->building_repair($building->{url}, $building->{id});
-  emit("Repaired $building->{name} from $building->{efficiency}%");
+my @sorted = map $_->[0], sort { $a->[1] <=> $b->[1] } @cost;
+
+while (@sorted) {
+  # By default, repair the cheapest first
+  my $pick = $sorted[0];
+
+  # Repair platforms first if we're at negative plots
+  if ($client->body_status($body_id)->{plots_available} < 0) {
+    my @platforms_first = (
+      grep { $_->{url} =~ /platform/ } @sorted,
+      grep { $_->{url} !~ /platform/ } @sorted,
+    );
+    $pick = $platforms_first[0];
+  }
+
+  # If we're repairing a Tyleon, repair the most expensive one
+  if ($pick->{name} =~ /Tyleon/) {
+    my @tyleons = grep { $_->{name} =~ /Tyleon/ } @sorted;
+    $pick = $tyleons[$#tyleons];
+  }
+
+  @sorted = grep { $_ ne $pick } @sorted;
+
+  $client->building_repair($pick->{url}, $pick->{id});
+  emit("Repaired $pick->{name} from $pick->{efficiency}%");
 }
 
 sub emit {
