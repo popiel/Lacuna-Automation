@@ -67,11 +67,15 @@ for (;;) {
     }
     if (grep(/Excavator/, @{$message->{tags}}) &&
         $message->{subject} =~ /Excavator Results|Excavator Deployed/) {
-      my $detail = $client->call(inbox => read_message => $message->{id});
+      # my $detail = $client->call(inbox => read_message => $message->{id});
+      my $detail = $client->mail_message($message->{id});
+      my $body_id = '';
+      $body_id = $1 if $detail->{message}{body} =~ /\{Planet (\d+)/;
       my @replacements = grep { $_->[1] eq "Replace" && $_->[2] !~ /^Fail/ } @{$detail->{message}{attachments}{table}};
-      if (@replacements || $detail->{message}{body} =~ /It is now operational and will start sending back its results/) {
-        my $body_id = ($detail->{message}{body} =~ /\{Planet (\d+)/);
-        emit("Excavator replacement for ".join(", ", map { $_->[0] } @replacements)."; invalidating ship list.", $body_id);
+      my @targets = map { $_->[0] } @replacements;
+      push(@targets, $1) if !@replacements && $detail->{message}{body} =~ /deployed on \{Starmap -?\d+ -?\d+ ([^}]+)\}/;
+      if (@targets) {
+        emit("Excavator replacement for ".join(", ", @targets)."; invalidating ship list.", $body_id);
         $client->cache_invalidate( type => 'spaceport_view_all_ships', id => $body_id );
         $client->cache_invalidate( type => 'excavators',               id => $body_id );
       }
