@@ -151,7 +151,7 @@ for my $ship (@ships) {
 }
 
 if (@glyphs || @plans) {
-  emit(sprintf("Not sending %d plans and %d glyphs", List::Util::sum(map $_->{quantity}, @plans), List::Util::sum(map $_->{quantity}, @glyphs)));
+  emit(sprintf("Not sending %d plans and %d glyphs", List::Util::sum(map $_->{quantity}, @plans), List::Util::sum(map $_->{quantity}, @glyphs)), $planets->{$body_id[0]});
 }
 
 sub emit {
