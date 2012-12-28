@@ -117,14 +117,16 @@ eval {
 
       for my $recipe (@recipes) {
         my $count = $possible{$recipe};
-        print "Making $count halls with ".join(", ", @$recipe)."\n";
-        my $result = eval { $client->glyph_assemble($body_id, $recipe, $count); };
-        if (!$result) {
-          warn "Couldn't assemble glyphs on $planets->{$body_id}: $@\n";
-        } elsif ($result->{item_name} eq "Halls of Vrbansk") {
-          $made{$body_id} += $count;
-        } else {
-          print "Failed to make halls!\n";
+        if ($count) {
+          print "Making $count halls with ".join(", ", @$recipe)."\n";
+          my $result = eval { $client->glyph_assemble($body_id, $recipe, $count); };
+          if (!$result) {
+            warn "Couldn't assemble glyphs on $planets->{$body_id}: $@\n";
+          } elsif ($result->{item_name} eq "Halls of Vrbansk") {
+            $made{$body_id} += $count;
+          } else {
+            print "Failed to make halls!\n";
+          }
         }
       }
 
