@@ -91,7 +91,7 @@ eval {
 
   push(@body_name, sort values(%$planets)) unless @body_name;
   warn "Looking at bodies ".join(", ", @body_name)."\n" if $debug;
-  for my $body_name (@body_name) { 
+  for my $body_name (@body_name) {
     eval {
       my $body_id;
       for my $id (keys(%$planets)) {
