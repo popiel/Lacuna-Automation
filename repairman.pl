@@ -14,6 +14,7 @@ autoflush STDERR 1;
 
 my $config_name = "config.json";
 my $body_name;
+my $all_bodies = 0;
 my $queue_name;
 my $debug = 0;
 my $quiet_no_body = 0;
@@ -21,6 +22,7 @@ my $quiet_no_body = 0;
 GetOptions(
   "config=s" => \$config_name,
   "body=s"   => \$body_name,
+  "all-bodies" => \$all_bodies,
   "debug"    => \$debug,
   "quiet_no_body"    => \$quiet_no_body,
 ) or die "$0 --config=foo.json --body=Bar\n";
@@ -35,6 +37,9 @@ if ($body_name) {
   exit(1) unless $body_id || !$quiet_no_body;
   die "No matching planet for name $body_name\n" unless $body_id;
   repair($body_id);
+} elsif($all_bodies) {
+    my $planets = $client->empire_status->{planets};
+    repair($_) for keys(%$planets);
 } else {
   $body_id = $client->empire_status->{home_planet_id};
   repair($body_id);
