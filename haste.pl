@@ -477,8 +477,19 @@ sub recycle {
             $recycled{ $res } += $recycle{ $res };
         }
 
-        $client->recycle_recycle($center->{id}, $recycle{water}, $recycle{ore}, $recycle{energy}, $center->{url})
-            unless $opts{'dry-run'};
+        eval {
+            $client->recycle_recycle(
+                $center->{id},
+                $recycle{water}, $recycle{ore}, $recycle{energy},
+                $center->{url},
+            ) unless $opts{'dry-run'};
+        };
+
+        if ($@) {
+            warn $@;
+            next;
+        }
+
         output("Recycled for $recycle{ore} ore, $recycle{water} water, and $recycle{energy} energy.");
         $left_to_recycle -= $recycle_capacity;
     }
