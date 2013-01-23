@@ -406,12 +406,12 @@ sub recycle {
     my @buildings = map  { +{ %{ $buildings->{$_} }, id => $_ } } keys(%$buildings);
     my @centers   =
         sort { $b->{level} <=> $a->{level} }
-        grep { $_->{name} eq "Waste Recycling Center" }
+        grep { $_->{name} =~ /^Waste (?:Recycling Center|Exchanger)$/ }
         @buildings;
-    verbose( "We have @{[ scalar @centers || 0 ]} recycling centers on this planet." );
+    verbose( "We have @{[ scalar @centers || 0 ]} recycling buildings on this planet." );
 
     unless ( scalar @centers ) {
-        output( "No recycling centers; nothing to do." );
+        output( "No recycling buildings; nothing to do." );
         return \%recycled;
     }
 
@@ -423,7 +423,7 @@ sub recycle {
         }
 
         if ( $center->{work} ) {
-            verbose( "recycling center $center->{id} is busy; skipping\n" );
+            verbose( "$center->{name} $center->{id} is busy; skipping\n" );
             next;
         }
 
@@ -477,7 +477,7 @@ sub recycle {
             $recycled{ $res } += $recycle{ $res };
         }
 
-        $client->recycle_recycle($center->{id}, $recycle{water}, $recycle{ore}, $recycle{energy})
+        $client->recycle_recycle($center->{id}, $recycle{water}, $recycle{ore}, $recycle{energy}, $center->{url})
             unless $opts{'dry-run'};
         output("Recycled for $recycle{ore} ore, $recycle{water} water, and $recycle{energy} energy.");
         $left_to_recycle -= $recycle_capacity;
