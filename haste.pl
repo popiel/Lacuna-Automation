@@ -52,7 +52,7 @@ Options:
     --verbose                 - Provides additional information about how decisions
                                 are made
     --planet <p1[,p2,...]>    - List of planets to run against
-    --interval <minutes>      - Minuts to sleep between runs. Also controls recycle
+    --interval <minutes>      - Minutes to sleep between runs. Also controls recycle
                                 center batches
     --recycle-balanced        - Forces haste to recycle balanced amounts between all
                                 resources
@@ -398,7 +398,7 @@ sub recycle {
     my ($s, $amount) = @_;
     my %recycled;
 
-    output( "Looking to recycle $amount of waste int new resources" );
+    output( "Looking to recycle $amount of waste into new resources" );
     my $buildings = $client->body_buildings($s->{id})->{'buildings'};
     my @buildings = map  { +{ %{ $buildings->{$_} }, id => $_ } } keys(%$buildings);
     my @centers   =
