@@ -54,6 +54,8 @@ Options:
     --planet <p1[,p2,...]>    - List of planets to run against
     --interval <minutes>      - Minutes to sleep between runs. Also controls recycle
                                 center batches
+    --batch-time <minutes>    - Minutes to make recycling batches fill. Falls back to
+                                --interval or defaults to 10 minutes
     --recycle-balanced        - Forces haste to recycle balanced amounts between all
                                 resources
     --recycle-by-amount       - Recycling focuses on the resource with the smallest
@@ -89,6 +91,7 @@ sub Main {
         'verbose|v!',
         'planet|p=s@',
         'interval|i|s|sleep=i',
+        'batch-size|batch|b=i',
         'keep-hours|kh=f',
         'keep-units|ku=f',
         'min-percent|min=f',
@@ -426,7 +429,8 @@ sub recycle {
 
         my $view = $client->building_view($center->{url}, $center->{id});
         my $recycle_capacity = int List::Util::min(
-            ( ( ( ($opts{interval}||10) * 60 ) - 30 ) / $view->{recycle}{seconds_per_resource} ),
+            ( ( ( ($opts{'batch-size'}||$opts{interval}||10) * 60 ) - 30 )
+              / $view->{recycle}{seconds_per_resource} ),
             $left_to_recycle,
             $client->body_status($s->{id})->{'waste_stored'}
         );
