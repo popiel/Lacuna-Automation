@@ -22,10 +22,12 @@ my $planets = $client->empire_status->{planets};
 
 my %zones;
 for my $id (List::Util::shuffle(keys(%$planets))) {
+    emit("cheking buildings on planet $id");
   my $buildings = $client->body_buildings($id);
   my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_, body_id => $id } } keys(%{$buildings->{buildings}});
   my $ed = (grep($_->{name} eq "Entertainment District", @buildings))[0];
   if ($ed) {
+    emit("found an entertainment district in zone $buildings->{status}{body}{zone}\n");
     $zones{$buildings->{status}{body}{zone}} = $ed;
   }
 }
@@ -49,6 +51,9 @@ for my $ed (List::Util::shuffle(values(%zones))) {
           sleep(10 + rand() * 15);
         }
     }
+  }
+  else {
+    emit("I did not get any results for lottery voting options: $!\n");
   }
 }
 
