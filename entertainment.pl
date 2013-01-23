@@ -42,11 +42,12 @@ for my $ed (List::Util::shuffle(values(%zones))) {
   } while ($tries-- > 0 && (!$result || !@{$result->{options}}));
   if ($result) {
     emit("Got ".scalar(@{$result->{options}})." entertainment links", $ed->{body_id});
-    my $link = (List::Util::shuffle(@{$result->{options}}))[0];
-    if ($link) {
-      emit("Visiting $link->{name} at $link->{url}", $ed->{body_id});
-      `GET '$link->{url}'`;
-      sleep(10 + rand() * 15);
+    for my $link (List::Util::shuffle(@{$result->{options}})) {
+        if ($link) {
+          emit("Visiting $link->{name} at $link->{url}", $ed->{body_id});
+          `GET '$link->{url}'`;
+          sleep(10 + rand() * 15);
+        }
     }
   }
 }
