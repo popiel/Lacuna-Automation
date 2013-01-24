@@ -13,6 +13,7 @@ my $sleep = 1;
 GetOptions(
   "config=s" => \$config_name,
   "sleep!" => \$sleep,
+  "all-links" => \my $all_links,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 sleep(900 + rand() * 900) if $sleep;
@@ -44,7 +45,8 @@ for my $ed (List::Util::shuffle(values(%zones))) {
   } while ($tries-- > 0 && (!$result || !@{$result->{options}}));
   if ($result) {
     emit("Got ".scalar(@{$result->{options}})." entertainment links", $ed->{body_id});
-    for my $link (List::Util::shuffle(@{$result->{options}})) {
+    my @links = ($all_links) ? @{$result->{options}} : ((List::Util::shuffle(@{$result->{options}}))[0]);
+    for my $link ( @links ) {
         if ($link) {
           emit("Visiting $link->{name} at $link->{url}", $ed->{body_id});
           `GET '$link->{url}'`;
