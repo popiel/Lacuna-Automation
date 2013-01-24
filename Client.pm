@@ -364,7 +364,7 @@ sub body_buildable {
       push(@plots, [ $x, $y ]) unless $plots{$x,$y};
     }
   }
-  
+
   $result = $self->call(body => get_buildable => $body_id, $plots[0][0], $plots[0][1]);
 
   my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
@@ -1006,7 +1006,6 @@ sub spy_list {
   my $intel = $self->find_building($where, "Intelligence Ministry");
 
   my @spies;
-  my $result;
   for my $page (1..30) {
     $result = $self->call(intelligence => view_spies => $intel->{id}, $page);
     push(@spies, @{$result->{spies}});
@@ -1244,12 +1243,12 @@ sub select_exchange {
     if ($amount >= $top) {
       my $step;
       if ($top < @ordered) {
-        $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
+        $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]),
                                 ($existing{$ordered[$top]} + $giving{$ordered[$top]}) - ($existing{$ordered[0]} + $giving{$ordered[0]}),
                                 int($amount / $top));
         $giving{$_} += $step for @ordered[0..($top-1)];
       } else {
-        $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]), 
+        $step = List::Util::min((map { $extra{$_} - $giving{$_} } @ordered[0..($top-1)]),
                                 int($amount / $top));
         $giving{$_} += $step for @ordered[0..($top-1)];
       }
