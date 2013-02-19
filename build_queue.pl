@@ -207,9 +207,10 @@ for (my $j = $[; $j <= $#queue; $j++) {
       }
     }
   }
-  if ($command =~ /^upgrade (\d+) (.*)/o) {
-    my $level = $1;
-    my $name = $2;
+  if ($command =~ /^upgrade (\<?)(\d+) (.*)/o) {
+    my $upTo = $1;
+    my $level = $2;
+    my $name = $3;
     my $realname = $name;
 
     next if @builds;
@@ -224,7 +225,8 @@ for (my $j = $[; $j <= $#queue; $j++) {
     for my $id (keys %{$buildings->{buildings}}) {
       my $building = $buildings->{buildings}{$id};
       print "Matching against $building->{level} $building->{name}\n" if $debug;
-      if ($building->{name} eq $name && (!$level || $building->{level} == $level) && $building->{level} < 30) {
+      if ($building->{name} eq $name && $building->{level} < 30 &&
+          (!$level || ($upTo ? $building->{level} < $level : $building->{level} == $level))) {
         $building->{id} = $id;
         my $message = upgrade_check($building, 1);
         if ($message) {
@@ -238,7 +240,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
         my $upgrade = $client->building_upgrade($building->{url}, $id);
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
         if ($retain) {
-          emit("Retaining upgrade command for $level $realname");
+          emit("Retaining upgrade command for $upTo$level $realname");
         }
         else {
           splice(@queue, $j, 1);

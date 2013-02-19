@@ -20,6 +20,7 @@ my $debug = 0;
 my $quiet = 0;
 my $wanted;
 my $plan_type = "Halls of Vrbansk";
+my $extra_levels = 0;
 my $noaction;
 
 GetOptions(
@@ -31,6 +32,7 @@ GetOptions(
   "count=s"     => \$wanted,
   "ship=s"      => \$ship_name,
   "name|type=s" => \$plan_type,
+  "extra=i"     => \$extra_levels,
 ) or die "$0 --config=foo.json --body=Bar --body=Baz --count=all\n";
 
 die "Must specify two bodies\n" unless @body_name == 2;
@@ -74,7 +76,7 @@ my $plans;
 
 $plans  = $client->body_plans($body_id[0]);
 @plans = @{$plans->{plans}};
-@plans = grep { $_->{name} =~ /$plan_type/ } @plans;
+@plans = grep { $_->{name} =~ /$plan_type/ && $_->{extra_build_level} == $extra_levels } @plans;
 
 my $available = ($plans[0] || {})->{quantity} || 0;
 

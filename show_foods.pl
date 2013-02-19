@@ -5,13 +5,14 @@ use strict;
 use Client;
 use Getopt::Long;
 use JSON::PP;
-use List::Util;
+use List::Util qw(sum);
 
 my $config_name = "config.json";
-my $body_name;
+my @body_names;
 
 GetOptions(
   "config=s" => \$config_name,
+  "body=s"   => \@body_names,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
@@ -54,6 +55,7 @@ my %stats;
 my %total = map { ($_->[0] => 0) } values %foods;
 $total{$_} = 0 for keys %total;
 for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys(%$planets)) {
+  next unless grep { $planets->{$body_id} =~ /$_/ } @body_names;
   my $buildings = $client->body_buildings($body_id);
   print "$planets->{$body_id}: orbit $buildings->{status}{body}{orbit}, net $buildings->{status}{body}{food_hour} food/hr\n";
   my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
@@ -87,6 +89,8 @@ for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys(%$planets)) {
     }
     print join("; ", @seq)."\n";
   }
+  my $produce = sum(values(%produce));
+  print "  produce: $produce, net $buildings->{status}{body}{food_hour} (".int(100 * $buildings->{status}{body}{food_hour} / $produce)."%)\n";
 }
 print "\nTotal:\n";
 for my $food (sort keys %total) {
