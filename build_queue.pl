@@ -207,7 +207,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
       }
     }
   }
-  if ($command =~ /^upgrade (\<?)(\d+) (.*)/o) {
+  if ($command =~ /^upgrade (\<?) *(\d+) (.*)/o) {
     my $upTo = $1;
     my $level = $2;
     my $name = $3;
@@ -287,14 +287,18 @@ for (my $j = $[; $j <= $#queue; $j++) {
       @builds = ();
     };
   }
-  if ($command =~ /^sacrifice (\d+) (.*)/o) {
-    my $level = $1;
-    my $name = $2;
+  if ($command =~ /^sacrifice (\<?) *(\d+) (.*)/o) {
+    my $upTo = $1;
+    my $level = $2;
+    my $name = $3;
 
     next if @builds;
 
     my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
-    my $target = (grep { $_->{name} eq $name && ($level ? $_->{level} == $level : $_->{level} < 30)} @buildings)[0];
+    my $target = (grep { $_->{name} eq $name &&
+                         ($level
+                          ? $upTo ? $_->{level} < $level : $_->{level} == $level
+                          : $_->{level} < 30) } @buildings)[0];
     if ($target) {
       my @halls = grep { $_->{name} eq "Halls of Vrbansk" } @buildings;
       my $plans = eval { first { $_->{name} eq "Halls of Vrbansk" } @{$client->body_plans($body_id)->{plans}} }
@@ -324,7 +328,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
       emit("Sacrificing ".($target->{level}+1)." halls to upgrade $name");
       $client->halls_sacrifice($halls[0]{id}, $target->{id});
       if ($retain) {
-        emit("Retaining sacrifice command for $level $name");
+        emit("Retaining sacrifice command for $upTo$level $name");
       }
       else {
         splice(@queue, $j, 1);
