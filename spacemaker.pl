@@ -17,13 +17,20 @@ my $body_name;
 my $queue_name;
 my $debug = 0;
 my $quiet = 0;
+my $do_food = "default";
+my $do_ore  = "default";
 
 GetOptions(
   "config=s" => \$config_name,
   "body=s"   => \$body_name,
   "debug"    => \$debug,
   "quiet"    => \$quiet,
+  "food!"    => \$do_food,
+  "ore!"     => \$do_ore,
 ) or die "$0 --config=foo.json --body=Bar\n";
+
+$do_food = 0 if $do_food eq "default" && $do_ore  && $do_ore  ne "default";
+$do_ore  = 0 if $do_ore  eq "default" && $do_food && $do_food ne "default";
 
 my $client = Client->new(config => $config_name);
 my $body_id;
@@ -43,32 +50,43 @@ $body_name = $client->empire_status->{planets}{$body_id};
 my $buildings = $client->body_buildings($body_id);
 my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_ } } keys(%{$buildings->{buildings}});
 
-my $food = (grep($_->{name} eq "Food Reserve", @buildings))[0];
-$food or do { emit("No Food Reserve"); exit(1); };
+do_dump("food", "Food Reserve"     ) if $do_food;
+do_dump("ore",  "Ore Storage Tanks") if $do_ore;
 
-my %stored = %{$client->call(foodreserve => view => $food->{id})->{food_stored}};
-my $status = $client->body_status($body_id);
-my $wanted = List::Util::max($status->{food_capacity} / 2, $status->{food_capacity} - $status->{food_hour} * 2);
-exit(0) if $status->{food_stored} <= $wanted;
+sub do_dump {
+  my $type = shift;
+  my $name = shift;
 
-my @ordered = sort { $stored{$a} <=> $stored{$b} } keys %stored;
-my %keep;
-while ($wanted / @ordered > $stored{$ordered[0]}) {
-  my $f = shift @ordered;
-  $keep{$f} = $stored{$f};
-  $wanted  -= $stored{$f};
-}
-for my $f (@ordered) {
-  $keep{$f} = int($wanted / @ordered);
-}
+  my $building = (grep($_->{name} eq $name, @buildings))[0];
+  if (!$building) {
+    emit("Skipping $type; no $name");
+    return;
+  }
 
-my %dump = map { $_ => $stored{$_} - $keep{$_} } grep { $stored{$_} > $keep{$_} } keys %stored;
+  my %stored = %{$client->call($building->{url} => view => $building->{id})->{$type."_stored"}};
+  my $status = $client->body_status($body_id);
+  my $wanted = List::Util::max($status->{$type."_capacity"} / 2, $status->{$type."_capacity"} - $status->{$type."_hour"} * 2);
+  return if $status->{$type."_stored"} <= $wanted;
 
-emit("Dumping ".join(", ", map { "$dump{$_} $_" } keys %dump));
+  my @ordered = sort { $stored{$a} <=> $stored{$b} } keys %stored;
+  my %keep;
+  while ($wanted / @ordered > $stored{$ordered[0]}) {
+    my $f = shift @ordered;
+    $keep{$f} = $stored{$f};
+    $wanted  -= $stored{$f};
+  }
+  for my $f (@ordered) {
+    $keep{$f} = int($wanted / @ordered);
+  }
 
-for my $f (keys %dump) {
-  next unless $dump{$f};
-  eval { $client->call(foodreserve => dump => $food->{id}, $f, $dump{$f}); };
+  my %dump = map { $_ => $stored{$_} - $keep{$_} } grep { $stored{$_} > $keep{$_} } keys %stored;
+
+  emit("Dumping ".join(", ", map { "$dump{$_} $_" } keys %dump));
+
+  for my $f (keys %dump) {
+    next unless $dump{$f};
+    eval { $client->call($building->{url} => dump => $building->{id}, $f, $dump{$f}); };
+  }
 }
 
 sub emit {
