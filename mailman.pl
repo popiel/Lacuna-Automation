@@ -95,7 +95,7 @@ for (;;) {
     }
     if (grep(/Probe/, @{$message->{tags}}) && !$message->{has_read}) {
       my $detail = $client->call(inbox => read_message => $message->{id});
-      if ($detail->{message}{body} =~ /\{Empire \d+ (last|kiamo|fireartist)\}/) {
+      if ($detail->{message}{body} =~ /\{Empire \d+ (last|kiamo|fireartist|Cryptomega|Kreeact)\}/) {
         emit("Trashing $message->{id}") if $debug;
         push(@trash, $message->{id});
       }

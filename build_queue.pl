@@ -45,13 +45,9 @@ if ($body_name) {
 $body_name = $client->body_status($body_id)->{name};
 
 my $buildings = $client->body_buildings($body_id);
+for my $id (keys(%{$buildings->{buildings}})) { $buildings->{buildings}{$id}{id} = $id; }
 my $ready_in;
 my @builds = grep($_->{pending_build}, values(%{$buildings->{buildings}}));
-# if (scalar @builds) {
-#     $ready_in = max(map { Client::parse_time($_->{pending_build}{end}) } @builds) - time();
-#     emit("builds complete in $ready_in seconds.") unless $quiet_no_body;
-#     exit(0);
-# }
 
 $queue_name ||= "$body_name.queue";
 $queue_name =~ s/\s+/_/g;
@@ -139,7 +135,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
 
     next if @builds;
 
-    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @buildings = values(%{$buildings->{buildings}});
     my @targets = sort { $a->{level} <=> $b->{level} } grep { $_->{name} eq $name } @buildings;
     @targets = grep { $_->{level} == $level } @targets if $level;
     @targets = grep { $_->{x} == $x && $_->{y} == $y } @targets if $x || $y;
@@ -216,7 +212,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
     next if @builds;
 
     if ($name eq "Tyleon") {
-      my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+      my @buildings = values(%{$buildings->{buildings}});
       @buildings = grep { $_->{name} =~ /Tyleon/ } @buildings;
       @buildings = sort { ($a->{level} <=> $b->{level}) || ($a->{name} cmp $b->{name}) } @buildings;
       $name = $buildings[0]{name};
@@ -261,6 +257,62 @@ for (my $j = $[; $j <= $#queue; $j++) {
       }
     }
   }
+  if ($command =~ /^require (\d+x)? *(\d+) (.*)/o) {
+    my $count = $1 || 1;
+    my $level = $2;
+    my $name = $3;
+
+    $count =~ s/x$//;
+
+    next if @builds;
+    my @buildings = sort { $b->{level} <=> $a->{level} } grep { $_->{name} eq $name } values(%{$buildings->{buildings}});
+    $#buildings = $count - 1 if @buildings > $count;
+    if (@buildings < $count) {
+      # Oops, have to build it.
+      $buildable ||= $client->body_buildable($body_id);
+      my $reqs = $buildable->{buildable}{$name};
+      unless ($reqs && ($reqs->{build}{can} || $reqs->{build}{reason}[1] =~ /Lost City of Tyleon/)) {
+        emit("Cannot build $name: $reqs->{build}{reason}[1]") unless $quiet && $sleepy;
+        if (!$quiet) {
+          splice(@queue, $j, 1, "-$queue[$j]");
+          write_queue();
+        }
+        next;
+      }
+      my $build = eval { $client->body_build($body_id, $name) };
+      if ($build) {
+        emit("Building $name, complete at ".Client::format_time(Client::parse_time($build->{building}{pending_build}{end})));
+        @queue = map { s/^\-//; $_; } @queue;
+        write_queue();
+        push(@builds, $name);
+      } else {
+        if (my $e = Exception::Class->caught('LacunaRPCException')) {
+          emit("Couldn't build $name: ".$e->code." ".$e->text);
+        } else {
+          my $e = Exception::Class->caught();
+          ref $e ? $e->rethrow : die $e;
+        }
+      }
+    } else {
+      my $building = pop(@buildings);
+      next if $building->{level} >= $level;
+
+      my $message = upgrade_check($building, 1);
+      if ($message) {
+        emit("Cannot upgrade $building->{level} $name: $message") unless $quiet && $sleepy;
+        if ($queue[$j] !~ /^\-/) {
+          splice(@queue, $j, 1, "-$queue[$j]");
+          write_queue();
+        }
+        next;
+      }
+      my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
+      emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+      @queue = map { s/^\-//; $_; } @queue;
+      write_queue();
+      push(@builds, $name);
+    }
+  }
   if ($command =~ /^subsidize (\d+ ?\w*)( limit (\d+))?/o) {
     my $time = $1;
     my $amount = $3;
@@ -278,12 +330,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
 
     eval { 
       my $result = $client->body_subsidize($body_id);
-      my @save;
-      push(@save, int($ready_in / 86400)."d") if $ready_in >= 86400; $ready_in %= 86400;
-      push(@save, int($ready_in /  3600)."h") if $ready_in >=  3600; $ready_in %=  3600;
-      push(@save, int($ready_in /    60)."m") if $ready_in >=    60; $ready_in %=    60;
-      push(@save, int($ready_in /     1)."s") if $ready_in >=     1; $ready_in %=     1;
-      emit("Subsidized build queue for $result->{essentia_spent} essentia, saving ".join(" ", @save));
+      emit("Subsidized build queue for $result->{essentia_spent} essentia, saving ".duration($ready_in));
       @builds = ();
     };
   }
@@ -294,7 +341,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
 
     next if @builds;
 
-    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @buildings = values(%{$buildings->{buildings}});
     my $target = (grep { $_->{name} eq $name &&
                          ($level
                           ? $upTo ? $_->{level} < $level : $_->{level} == $level
@@ -343,7 +390,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
   if ($command =~ /^shipbuild (.*)/o) {
     my $name = $1;
 
-    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @buildings = values(%{$buildings->{buildings}});
     my $yard = (grep { $_->{name} eq "Shipyard" } @buildings)[0];
 
     next unless $yard;
@@ -411,7 +458,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
     }
     $focus = ($focus =~ /store/) ? "stored" : "hour";
 
-    my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+    my @buildings = values(%{$buildings->{buildings}});
     my $status = $client->body_status($body_id);
     my %ratio;
     for my $type (qw(food ore water energy)) {
@@ -592,7 +639,7 @@ sub upgrade_check {
   my $side_effects = shift;
   return "Undefined building." unless $building;
   $building = populate_building_with_production($building);
-  my @buildings = map { { id => $_, %{$buildings->{buildings}{$_}} } } keys %{$buildings->{buildings}};
+  my @buildings = values(%{$buildings->{buildings}});
   my $depot = List::Util::first { $_->{url} =~ /subspacesupplydepot/ } @buildings;
   my $status = $client->body_status($body_id);
   my @message;
