@@ -295,7 +295,10 @@ for (my $j = $[; $j <= $#queue; $j++) {
       }
     } else {
       my $building = pop(@buildings);
-      next if $building->{level} >= $level;
+      if ($building->{level} >= $level) {
+        $abort = 0;
+        next;
+      }
 
       my $message = upgrade_check($building, 1);
       if ($message) {
