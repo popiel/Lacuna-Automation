@@ -870,7 +870,7 @@ sub yard_buildable {
   my $self = shift;
   my $yard_id = shift;
 
-  my $result = $self->cache_read( type => 'buildable', id => $yard_id );
+  my $result = $self->cache_read( type => 'shipyard_buildable', id => $yard_id );
   return $result if $result;
   $result = $self->call(shipyard => get_buildable => $yard_id);
 
@@ -884,7 +884,7 @@ sub yard_buildable {
   }
 
   my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
-  $self->cache_write( type => 'buildable', id => $yard_id, data => $result, invalid => $invalid );
+  $self->cache_write( type => 'shipyard_buildable', id => $yard_id, data => $result, invalid => $invalid );
   return $result;
 }
 
@@ -1160,6 +1160,7 @@ sub present_captcha {
         spaceport_view_all_ships     => 'body/%d/view_all_ships',
         observatory_get_probed_stars => 'building/%d/get_probed_stars',
         shipyard_view_build_queue    => 'building/%d/view_build_queue',
+        shipyard_buildable           => 'building/%d/buildable',
         mission_list                 => 'building/%d/mission_list',
         mail_inbox                   => 'mail/inbox',
         mail_message                 => 'mail/message/%d',

@@ -362,21 +362,22 @@ for (my $j = $[; $j <= $#queue; $j++) {
         }
         next;
       }
-      if (!@halls) {
-        if ($no_wait) {
-          emit("Building Halls of Vrbansk");
-          my $result = $client->body_build($body_id, "Halls of Vrbansk");
-          push(@builds, $name);
-          next;
-        } else {
-          emit("Building Halls of Vrbansk, waiting 16 seconds");
-          my $result = $client->body_build($body_id, "Halls of Vrbansk");
-          push(@halls, $result->{building});
-          sleep(16);
-        }
-      }
+      # if (!@halls) {
+      #   if ($no_wait) {
+      #     emit("Building Halls of Vrbansk");
+      #     my $result = $client->body_build($body_id, "Halls of Vrbansk");
+      #     push(@builds, $name);
+      #     next;
+      #   } else {
+      #     emit("Building Halls of Vrbansk, waiting 16 seconds");
+      #     my $result = $client->body_build($body_id, "Halls of Vrbansk");
+      #     push(@halls, $result->{building});
+      #     sleep(16);
+      #   }
+      # }
       emit("Sacrificing ".($target->{level}+1)." halls to upgrade $name");
-      $client->halls_sacrifice($halls[0]{id}, $target->{id});
+      my $upgrade = $client->building_upgrade($target->{url}, $target->{id});
+      # $client->halls_sacrifice($halls[0]{id}, $target->{id});
       if ($retain) {
         emit("Retaining sacrifice command for $upTo$level $name");
       }
