@@ -596,6 +596,20 @@ sub body_plans {
   return $result;
 }
 
+sub body_waste_chain {
+  my $self = shift;
+  my $body_id = shift;
+
+  my $result = $self->cache_read( type => 'waste_chain', id => $body_id );
+  return $result if $result;
+
+  $result = $self->call(trade => view_waste_chains => scalar($self->find_building($body_id, "Trade Ministry"))->{id});
+
+  my $invalid = time() + (23 * 3600);
+  $self->cache_write( type => 'waste_chain', id => $body_id, data => $result, invalid => $invalid );
+  return $result;
+}
+
 sub view_excavators {
   my $self = shift;
   my $body_id = shift;
@@ -1155,6 +1169,7 @@ sub present_captcha {
         plans                        => 'body/%d/plans',
         glyphs                       => 'body/%d/glyphs',
         excavators                   => 'body/%d/excavators',
+        waste_chain                  => 'body/%d/waste_chain',
         building_view                => 'building/%d/view',
         building_stats               => 'building/%d/stats_%d',
         spaceport_view_all_ships     => 'body/%d/view_all_ships',
