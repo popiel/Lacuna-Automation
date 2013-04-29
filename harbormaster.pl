@@ -66,12 +66,15 @@ sub base_waste_rate {
   my $body_id = shift;
 
   my $waste_rate = $client->body_status($body_id)->{waste_hour};
+#print "waste_rate: $waste_rate\n";
   my $waste_chain = $client->body_waste_chain($body_id)->{waste_chain}[0];
+#print "waste_chain: $waste_chain->{percent_transferred}% of $waste_chain->{waste_hour}\n";
   if ($waste_chain->{percent_transferred} >= 100) {
     $waste_rate += $waste_chain->{waste_hour};
   } else {
     $waste_rate += $waste_chain->{waste_hour} * $waste_chain->{percent_transferred} / 100;
   }
+#print "total waste_rate: $waste_rate\n";
   $waste_rate;
 }
 
@@ -157,7 +160,69 @@ for my $type (keys(%builds)) {
 
 # Send ships to requestors
 for my $body_id (@body_ids) {
-  my @ready = grep { $_->{task} eq "Docked" } @ships;
+  next if $body_id eq $yard_planet;
+  my %ready;
+  for my $ship (@ships) {
+    next unless $ship->{task} eq "Docked";
+    $ready{$ship->{type}} ||= [];
+    push(@{$ready{$ship->{type}}}, $ship);
+  }
+  my @sending;
+  for my $type (keys(%{$requests{$body_id}})) {
+    my $n = $requests{$body_id}{$type};
+    while ($n > 0) {
+      last unless @{$ready{$type}};
+      push(@sending, shift(@{$ready{$type}}));
+      $n--;
+    }
+  }
+  @sending = sort { !!is_trade_ship($b) <=> !!is_trade_ship($a) ||
+                    $b->{speed} <=> $a->{speed} } @sending;
+  while (@sending && is_trade_ship($sending[0])) {
+    my $carrier = shift(@sending);
+    my $space = int($carrier->{hold_size} / 50000);
+    my @carried;
+    while (@sending && $space) {
+      push(@carried, pop(@sending));
+      $space--;
+    }
+    my @items = map { { type => ship => ship_id => $_->{id} } } @carried;
+    push(@items, { type => water => quantity => 1 }) unless @items;
+    eval {
+      printf("Permanently sending %s to %s with:\n", $carrier->{type_human}, $planets->{$body_id});
+      for my $ship (@carried) {
+        printf("%10d %-26s berth %2d  speed %5d  stealth %5d  combat %5d  hold %9d\n",
+               @{$ship}{qw(id type_human berth_level speed stealth combat hold_size)});
+      }
+      $client->trade_push($trade->{id}, $body_id, [ @items ], { ship_id => $carrier->{id}, stay => 1 } );
+      for my $ship ($carrier, @carried) {
+        $ship->{task} = "Travelling";
+      }
+    }
+  }
+  my @carriers = sort { $b->{hold_size} <=> $a->{hold_size} } grep { $_->{task} eq "Docked" } is_trade_ship(@ships);
+  while (@sending) {
+    my $carrier = shift(@carriers);
+    my $space = int($carrier->{hold_size} / 50000);
+    my @carried;
+    while (@sending && $space) {
+      push(@carried, pop(@sending));
+      $space--;
+    }
+    my @items = map { { type => ship => ship_id => $_->{id} } } @carried;
+    last unless @items;
+    eval {
+      printf("Temporarily sending %s to %s with:\n", $carrier->{type_human}, $planets->{$body_id});
+      for my $ship (@carried) {
+        printf("%10d %-26s berth %2d  speed %5d  stealth %5d  combat %5d  hold %9d\n",
+               @{$ship}{qw(id type_human berth_level speed stealth combat hold_size)});
+      }
+      $client->trade_push($trade->{id}, $body_id, [ @items ], { ship_id => $carrier->{id}, stay => 0 } );
+      for my $ship ($carrier, @carried) {
+        $ship->{task} = "Travelling";
+      }
+    }
+  }
 }
 
 # Ensure enough scows in waste chain to handle total waste output + 10%
@@ -167,16 +232,16 @@ sub manage_waste_ships {
 
   my $port = eval { $client->find_building($body_id, "Space Port") };
 
-  my $waste_rate = base_waste_rate($body_id);
+  my $waste_rate = max(0, base_waste_rate($body_id));
   my $best_waste = first { $_->{attributes}{berth_level} <= $port->{level} } @waste_ships;
   my $best_haul = $best_waste->{attributes}{hold_size} * $best_waste->{attributes}{speed} / sqrt(3) / 2000;
   my $num_ships = int(($waste_rate * 1.1 + $best_haul - 1) / $best_haul);
-  printf("Base waste production rate %d/hr.  Best ship is %s, can haul %d/hr.  Need %d waste ships.\n",
-         $waste_rate, $best_waste->{type_human}, $best_haul, $num_ships);
+  printf("%s: Base waste production rate %d/hr.  Best ship is %s, can haul %d/hr.  Need %d waste ships.\n",
+         $planets->{$body_id}, $waste_rate, $best_waste->{type_human}, $best_haul, $num_ships);
 
   my @waste = is_waste_ship(@ships);
   my @current = grep { !is_obsolete($_, $best_waste) } @waste;
-  my @ordered = sort { is_obsolete($b, $best_waste) <=> is_obsolete($a, $best_waste) ||
+  my @ordered = sort { is_obsolete($a, $best_waste) <=> is_obsolete($b, $best_waste) ||
                        $b->{hold_size} <=> $a->{hold_size} ||
                        ($b->{task} eq "Waste Chain") <=> ($a->{task} eq "Waste Chain") } @waste;
   my $have_enough = adjust_waste_chain($body_id, $waste_rate * 1.1, @ordered);
@@ -207,7 +272,7 @@ sub adjust_waste_chain {
     if ($haul < $wanted_haul) {
       if ($ships[$j]{task} eq "Waste Chain") {
         $haul += $ships[$j]{hold_size} * $ships[$j]{speed} / sqrt(3) / 2000;
-      } elsif ($ships[$j]{task} eq "Idle") {
+      } elsif ($ships[$j]{task} eq "Docked") {
         printf("%s: Adding ships to waste chain:\n", $planets->{$body_id}) unless $added;
         printf("  %-26s berth %2d  speed %5d  stealth %5d  combat %5d  hold %9d\n",
                $ships[$j]{type_human},
@@ -255,6 +320,10 @@ sub is_tagged_ship {
 
 sub is_waste_ship {
   (wantarray ? (is_tagged_ship("WasteChain", @_),) : scalar(is_tagged_ship("WasteChain", @_)))
+}
+
+sub is_trade_ship {
+  (wantarray ? (is_tagged_ship("SupplyChain", @_),) : scalar(is_tagged_ship("SupplyChain", @_)))
 }
 
 sub is_obsolete {
