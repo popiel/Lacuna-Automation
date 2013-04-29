@@ -610,6 +610,41 @@ sub body_waste_chain {
   return $result;
 }
 
+sub add_waste_ship_to_fleet {
+  my $self = shift;
+  my $body_id = shift;
+  my $ship_id = shift;
+
+  my $result = $self->call(trade => add_waste_ship_to_fleet =>
+                           scalar($self->find_building($body_id, "Trade Ministry"))->{id}, $ship_id);
+  $self->cache_invalidate( type => 'waste_chain',               id => $body_id );
+  $self->cache_invalidate( type => 'spaceport_view_all_ships',  id => $body_id );
+  return $result;
+}
+
+sub remove_waste_ship_from_fleet {
+  my $self = shift;
+  my $body_id = shift;
+  my $ship_id = shift;
+
+  my $result = $self->call(trade => remove_waste_ship_from_fleet =>
+                           scalar($self->find_building($body_id, "Trade Ministry"))->{id}, $ship_id);
+  $self->cache_invalidate( type => 'waste_chain',               id => $body_id );
+  $self->cache_invalidate( type => 'spaceport_view_all_ships',  id => $body_id );
+  return $result;
+}
+
+sub scuttle_ship {
+  my $self = shift;
+  my $body_id = shift;
+  my $ship_id = shift;
+
+  my $result = $self->call(spaceport => scuttle_ship =>
+                           scalar($self->find_building($body_id, "Space Port"))->{id}, $ship_id);
+  $self->cache_invalidate( type => 'spaceport_view_all_ships',  id => $body_id );
+  return $result;
+}
+
 sub view_excavators {
   my $self = shift;
   my $body_id = shift;
@@ -911,6 +946,10 @@ sub yard_build {
   my $result = $self->call(shipyard => build_ship => $building_id, $type, $count);
   $self->cache_invalidate( type => 'buildable', id => $building_id );
   $self->cache_invalidate( type => 'shipyard_view_build_queue', id => $building_id );
+  if ($result) {
+    $self->cache_invalidate( type => 'buildings',                id => $result->{status}{body}{id} );
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
+  }
   return $result;
 }
 

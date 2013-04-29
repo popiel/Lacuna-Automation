@@ -65,6 +65,14 @@ for (;;) {
       emit("Trashing $message->{id}") if $debug;
       push(@trash, $message->{id});
     }
+    if (grep(/Trade/, @{$message->{tags}}) &&
+        $message->{subject} =~ /Trade Accepted/) {
+      my $detail = $client->mail_message($message->{id});
+      if ($detail->{message}{body} =~ /Tyleon.*Rhutenia/) {
+        emit("Trashing $message->{id}") if $debug;
+        push(@trash, $message->{id});
+      }
+    }
     if (grep(/Excavator/, @{$message->{tags}}) &&
         $message->{subject} =~ /Excavator Results|Excavator Deployed/) {
       # my $detail = $client->call(inbox => read_message => $message->{id});
