@@ -96,8 +96,8 @@ for my $body_id (@body_ids) {
   my @ships = @{$client->port_all_ships($body_id)->{ships}};
 
   manage_waste_ships($body_id, @ships);
+  manage_supply_ships($body_id, @ships);
   # Ensure at least 2 unassigned galleons
-  # Ensure sufficient hulks in supply chain for 110%
   # Ensure 2 drones
   # Ensure 2-10 excavators
 
@@ -140,8 +140,8 @@ for my $yard (@yards) {
   }
 }
 
-# Figure out where to build ships
-for my $type (keys(%builds)) {
+# Figure out where to build ships, starting with the fast-to-build ships
+for my $type (sort { $buildable->{buildable}{$a}{cost}{seconds} <=> $buildable->{buildable}{$b}{cost}{seconds} } keys(%builds)) {
   next if $builds{$type} < 1;
   my %qty;
   for my $j (1..$builds{$type}) {
@@ -176,53 +176,88 @@ for my $body_id (@body_ids) {
       $n--;
     }
   }
-  @sending = sort { !!is_trade_ship($b) <=> !!is_trade_ship($a) ||
-                    $b->{speed} <=> $a->{speed} } @sending;
+
+  send_many_ships("sending %s to $planets->{$body_id} with:\n",
+                  $trade->{id}, $body_id, \@sending, \@ships);
+}
+
+# Send all returns back to the yard planet
+for my $body_id (@body_ids) {
+  next if $body_id eq $yard_planet;
+  next unless $returns{$body_id} && @{$returns{$body_id}};
+
+  send_many_ships("returning %s from $planets->{$body_id} with:\n",
+                  $client->find_building($body_id, "Trade Ministry")->{id},
+                  $yard_planet, $returns{$body_id}, $client->port_all_ships($body_id)->{ships});
+}
+
+sub send_many_ships {
+  my $message = shift;
+  my $source_trade = shift;
+  my $target_id = shift;
+  my $sending = shift;
+  my $ships = shift;
+
+  my @sending = sort { !!is_trade_ship($b) <=> !!is_trade_ship($a) ||
+                       $b->{speed} <=> $a->{speed} } @$sending;
   while (@sending && is_trade_ship($sending[0])) {
     my $carrier = shift(@sending);
-    my $space = int($carrier->{hold_size} / 50000);
-    my @carried;
-    while (@sending && $space) {
-      push(@carried, pop(@sending));
-      $space--;
-    }
-    my @items = map { { type => ship => ship_id => $_->{id} } } @carried;
-    push(@items, { type => water => quantity => 1 }) unless @items;
-    eval {
-      printf("Permanently sending %s to %s with:\n", $carrier->{type_human}, $planets->{$body_id});
-      for my $ship (@carried) {
-        printf("%10d %-26s berth %2d  speed %5d  stealth %5d  combat %5d  hold %9d\n",
-               @{$ship}{qw(id type_human berth_level speed stealth combat hold_size)});
-      }
-      $client->trade_push($trade->{id}, $body_id, [ @items ], { ship_id => $carrier->{id}, stay => 1 } );
-      for my $ship ($carrier, @carried) {
-        $ship->{task} = "Travelling";
-      }
+    last unless send_ships("Permanently $message", 1, $carrier, \@sending, $source_trade, $target_id);
+  }
+  if (@sending) {
+    my @carriers = sort { $b->{hold_size} <=> $a->{hold_size} } grep { $_->{task} eq "Docked" } is_trade_ship(@$ships);
+    while (@sending) {
+      my $carrier = shift(@carriers);
+      last unless send_ships("Temporarily $message", 0, $carrier, \@sending, $source_trade, $target_id);
     }
   }
-  my @carriers = sort { $b->{hold_size} <=> $a->{hold_size} } grep { $_->{task} eq "Docked" } is_trade_ship(@ships);
-  while (@sending) {
-    my $carrier = shift(@carriers);
-    my $space = int($carrier->{hold_size} / 50000);
-    my @carried;
-    while (@sending && $space) {
-      push(@carried, pop(@sending));
-      $space--;
-    }
-    my @items = map { { type => ship => ship_id => $_->{id} } } @carried;
-    last unless @items;
-    eval {
-      printf("Temporarily sending %s to %s with:\n", $carrier->{type_human}, $planets->{$body_id});
-      for my $ship (@carried) {
-        printf("%10d %-26s berth %2d  speed %5d  stealth %5d  combat %5d  hold %9d\n",
-               @{$ship}{qw(id type_human berth_level speed stealth combat hold_size)});
-      }
-      $client->trade_push($trade->{id}, $body_id, [ @items ], { ship_id => $carrier->{id}, stay => 0 } );
-      for my $ship ($carrier, @carried) {
-        $ship->{task} = "Travelling";
-      }
-    }
+}
+
+sub send_ships {
+  my $message      = shift;
+  my $lenient      = shift;
+  my $carrier      = shift;
+  my $sending      = shift;
+  my $source_trade = shift;
+  my $target_id    = shift;
+
+  my $space = int($carrier->{hold_size} / 50000);
+  my @carried;
+  while (@$sending && $space) {
+    push(@carried, pop(@$sending));
+    $space--;
   }
+  my @items = map { { type => ship => ship_id => $_->{id} } } @carried;
+  if (!@items) {
+    return 0 if !$lenient;
+    push(@items, { type => water => quantity => 1 });
+  }
+  eval {
+    printf($message, $carrier->{type_human});
+    for my $ship (@carried) {
+      printf("%10d %-26s berth %2d  speed %5d  stealth %5d  combat %5d  hold %9d\n",
+             @{$ship}{qw(id type_human berth_level speed stealth combat hold_size)});
+    }
+    $client->trade_push($source_trade, $target_id, [ @items ], { ship_id => $carrier->{id}, stay => 0 } );
+    for my $ship ($carrier, @carried) {
+      $ship->{task} = "Travelling";
+    }
+  };
+  return 1;
+}
+
+# Ensure sufficient hulks in supply chain for 110%
+sub manage_supply_ships {
+  my $body_id = shift;
+  my @ships = @_;
+
+  my $port = eval { $client->find_building($body_id, "Space Port") };
+  my $best_supply = first { $_->{attributes}{berth_level} <= $port->{level} } @supply_ships;
+  # fetch supply chains
+  # determine capacity * distance required
+  # determine ship count needed
+  # reallocate ships
+  # clean up ships
 }
 
 # Ensure enough scows in waste chain to handle total waste output + 10%
