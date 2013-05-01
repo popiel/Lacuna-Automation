@@ -11,12 +11,19 @@ use List::Util qw(min max sum first);
 my $config_name = "config.json";
 my @body_name;
 my $yard_name;
+my $max_build_time = "2 hours";
 
 GetOptions(
   "config=s" => \$config_name,
-  "body=s" => \@body_name,
-  "yard=s" => \$yard_name,
+  "body|b=s" => \@body_name,
+  "yard=s"   => \$yard_name,
+  "max_build_time|build|fill=s" => \$max_build_time,
 ) or die "$0 --config=foo.json --body=Bar\n";
+
+$max_build_time = $1         if $max_build_time =~ /^(\d+) ?s(econds?)?$/;
+$max_build_time = $1 * 60    if $max_build_time =~ /^(\d+) ?m(inutes?)?$/;
+$max_build_time = $1 * 3600  if $max_build_time =~ /^(\d+) ?h(ours?)?$/;
+$max_build_time = $1 * 86400 if $max_build_time =~ /^(\d+) ?d(ays?)?$/;
 
 my $client = Client->new(config => $config_name);
 my $planets = $client->empire_status->{planets};
@@ -27,6 +34,7 @@ my @yards = grep { $_->{level} == $yard->{level} } $client->find_building($yard_
 my @ships_wanted;
 
 my $buildable = $client->yard_buildable($yard->{id});
+for my $type (keys(%{$buildable->{buildable}})) { $buildable->{buildable}{$type}{type} = $type; }
 my @buildable = sort grep { $buildable->{buildable}{$_}{can} } keys(%{$buildable->{buildable}});
 print "Can build: ".join(" ", @buildable)."\n";
 my $galleon  = $buildable->{buildable}{galleon};
@@ -141,11 +149,13 @@ for my $yard (@yards) {
 }
 
 # Figure out where to build ships, starting with the fast-to-build ships
+my $cutoff = time() + $max_build_time;
 for my $type (sort { $buildable->{buildable}{$a}{cost}{seconds} <=> $buildable->{buildable}{$b}{cost}{seconds} } keys(%builds)) {
   next if $builds{$type} < 1;
   my %qty;
   for my $j (1..$builds{$type}) {
     my $winner = (sort { $a->{work_done} <=> $b->{work_done} } @yards)[0];
+    last if $winner->{work_done} > $cutoff;
     $winner->{work_done} += $buildable->{buildable}{$type}{cost}{seconds};
     $qty{$winner->{id}}++;
   }
@@ -171,7 +181,7 @@ for my $body_id (@body_ids) {
   for my $type (keys(%{$requests{$body_id}})) {
     my $n = $requests{$body_id}{$type};
     while ($n > 0) {
-      last unless @{$ready{$type}};
+      last unless $ready{$type} && @{$ready{$type}};
       push(@sending, shift(@{$ready{$type}}));
       $n--;
     }
@@ -281,8 +291,8 @@ sub manage_waste_ships {
                        ($b->{task} eq "Waste Chain") <=> ($a->{task} eq "Waste Chain") } @waste;
   my $have_enough = adjust_waste_chain($body_id, $waste_rate * 1.1, @ordered);
   if ($have_enough) {
-    my @junk  = grep { $_->{task} eq "Idle" &&  is_obsolete($_) } @waste;
-    my @extra = grep { $_->{task} eq "Idle" && !is_obsolete($_) } @waste;
+    my @junk  = grep { $_->{task} eq "Docked" &&  is_obsolete($_) } @waste;
+    my @extra = grep { $_->{task} eq "Docked" && !is_obsolete($_) } @waste;
     printf("Scuttling %2d obsolete waste ships on %s\n", scalar(@junk),  $planets->{$body_id}) if @junk;
     printf("Returning %2d extra waste ships on %s\n",    scalar(@extra), $planets->{$body_id}) if @extra;
     scuttle_ships($body_id, @junk);
