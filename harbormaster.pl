@@ -160,7 +160,7 @@ for my $type (sort { $buildable->{buildable}{$a}{cost}{seconds} <=> $buildable->
     $qty{$winner->{id}}++;
   }
   for my $yard (@yards) {
-    next unless $qty{$yard->{id}} > 0;
+    next unless ($qty{$yard->{id}} || 0) > 0;
     printf("Using yard at (%d,%d) to build %d %s\n",
            $yard->{x}, $yard->{y}, $qty{$yard->{id}}, $buildable->{buildable}{$type}{type_human});
     eval    { $client->yard_build($yard->{id}, $type, $qty{$yard->{id}}); }
@@ -231,7 +231,7 @@ sub send_ships {
   my $source_trade = shift;
   my $target_id    = shift;
 
-  my $space = int($carrier->{hold_size} / 50000);
+  my $space = int(($carrier->{hold_size} || 0) / 50000);
   my @carried;
   while (@$sending && $space) {
     push(@carried, pop(@$sending));
