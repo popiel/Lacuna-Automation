@@ -1170,6 +1170,31 @@ sub mail_archive {
   return $result;
 }
 
+sub boost_view {
+  my $self = shift;
+
+  my $result = $self->cache_read(type => 'empire_boosts');
+  return $result if $result;
+  my $result = $self->call(empire => 'view_boosts');
+  my $invalid = List::Util::min(time() + 3600);
+  $self->cache_write(type => 'empire_boosts', data => $result, invalid => $invalid);
+  return $result;
+}
+
+sub boost_aspect {
+  my $self = shift;
+  my $name = shift;
+
+  my $result;
+  if ($name eq "spy_training") {
+    $result = $self->call(empire => "spy_training_boost");
+  } else {
+    $result = $self->call(empire => "boost_$name");
+  }
+  $self->cache_invalidate(type => 'empire_boosts');
+  return $result;
+}
+
 sub present_captcha {
   my ($self, $captcha) = @_;
   $captcha ||= $self->call(captcha => "fetch");
@@ -1211,6 +1236,7 @@ sub present_captcha {
 
 {
     my %path_for = (
+        empire_boosts                => 'empire/boosts',
         empire_status                => 'empire/status',
         empire_profile               => 'empire/%d/profile',
         body_status                  => 'body/%d/status',
