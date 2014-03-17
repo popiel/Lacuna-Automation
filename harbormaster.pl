@@ -13,11 +13,46 @@ my @body_name;
 my $yard_name;
 my $max_build_time = "2 hours";
 
+# Ship types:
+# dory barge cargo_ship galleon freighter hulk hulk_fast hulk_huge smuggler_ship 
+# scow scow_fast scow_large scow_mega 
+# excavator fissure_sealer 
+# drone fighter
+# probe scanner surveyor 
+# bleeder detonator
+# observatory_seeker security_ministry_seeker spaceport_seeker 
+# placebo placebo2 placebo3 placebo4 placebo5 placebo6
+# colony_ship short_range_colony_ship stake 
+# snark snark2 snark3 
+# spy_pod 
+# supply_pod sweeper 
+# terraforming_platform_ship
+# thud
+
+my $wanted = {
+  drone         => { "Managed Drone"     => { min => 2, max => 2 } },
+  excavator     => { "Managed Excavator" => { min => 2, max => 10 } },
+  smuggler_ship => { "Fast Trade ##"     => { min => 0, max => 2 } },
+  galleon       => { "Outpost Trade ##"  => { min => 2, max => 2 } },
+};
+
+my $num_drones = 2;
+my $num_galleons = 2;
+my $num_smugglers = 0;
+my $min_excavators = 2;
+my $max_excavators = 10;
+
 GetOptions(
-  "config=s" => \$config_name,
-  "body|b=s" => \@body_name,
-  "yard=s"   => \$yard_name,
+  "config=s"         => \$config_name,
+  "body|b=s"         => \@body_name,
+  "yard=s"           => \$yard_name,
   "max_build_time|build|fill=s" => \$max_build_time,
+  "drones=i"         => \$num_drones,
+  "galleons=i"       => \$num_galleons,
+  "smugglers=i"      => \$num_smugglers,
+  "excavators=i"     => sub { $min_excavators = $max_excavators = $_[1] },
+  "min_excavators=i" => \$min_excavators,
+  "max_excavators=i" => \$max_excavators,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 $max_build_time = $1         if $max_build_time =~ /^(\d+) ?s(econds?)?$/;
@@ -86,6 +121,7 @@ sub base_waste_rate {
   $waste_rate;
 }
 
+my %scuttles;
 my %returns;
 my %requests;
 
@@ -105,16 +141,15 @@ for my $body_id (@body_ids) {
 
   manage_waste_ships($body_id, @ships);
   manage_supply_ships($body_id, @ships);
-  # Ensure at least 2 unassigned galleons
-  # Ensure 2 drones
-  # Ensure 2-10 excavators
+  manage_ship_count($body_id, "Outpost Trade ##",  "galleon",       $num_galleons,   $num_galleons,   @ships);
+  manage_ship_count($body_id, "Fast Trade ##",     "smuggler_ship", $num_smugglers,  $num_smugglers,  @ships);
+  manage_ship_count($body_id, "Managed Excavator", "excavator",     $min_excavators, $max_excavators, @ships);
+  manage_ship_count($body_id, "Managed Drone",     "drone",         $num_drones,     $num_drones,     @ships);
+}
 
-#  # Remove pending trades from requests
-#  for my $ship (@ships) {
-#    if ($ship->{task} =~ /Wait|Travel/) {
-#      $requests{$body_id}{$ship->{type}}--;
-#    }
-#  }
+# Scuttle all the indicated ships
+for my $body_id (keys %scuttles) {
+  scuttle_ships($body_id, @{$scuttles{$body_id}});
 }
 
 # Tally requests as builds
@@ -137,6 +172,29 @@ for my $ship (@ships) {
   if ($ship->{task} !~ /Chain/) {
     $builds{$ship->{type}}--;
   }
+}
+
+# Send available ships to requestors
+for my $body_id (@body_ids) {
+  next if $body_id eq $yard_planet;
+  my %ready;
+  for my $ship (@ships) {
+    next unless $ship->{task} eq "Docked";
+    $ready{$ship->{type}} ||= [];
+    push(@{$ready{$ship->{type}}}, $ship);
+  }
+  my @sending;
+  for my $type (keys(%{$requests{$body_id}})) {
+    my $n = $requests{$body_id}{$type};
+    while ($n > 0) {
+      last unless $ready{$type} && @{$ready{$type}};
+      push(@sending, shift(@{$ready{$type}}));
+      $n--;
+    }
+  }
+
+  send_many_ships("sending %s to $planets->{$body_id} with:\n",
+                  $trade->{id}, $body_id, \@sending, \@ships);
 }
 
 # Figure out completion times for yards
@@ -164,31 +222,8 @@ for my $type (sort { $buildable->{buildable}{$a}{cost}{seconds} <=> $buildable->
     printf("Using yard at (%d,%d) to build %d %s\n",
            $yard->{x}, $yard->{y}, $qty{$yard->{id}}, $buildable->{buildable}{$type}{type_human});
     eval    { $client->yard_build($yard->{id}, $type, $qty{$yard->{id}}); }
-    or eval { $client->yard_build($yard->{id}, $type); };
+    or eval { $client->yard_build($yard->{id}, $type, $yard->{level} - $client->yard_queue($yard->{id})->{number_of_ships_building}); };
   }
-}
-
-# Send ships to requestors
-for my $body_id (@body_ids) {
-  next if $body_id eq $yard_planet;
-  my %ready;
-  for my $ship (@ships) {
-    next unless $ship->{task} eq "Docked";
-    $ready{$ship->{type}} ||= [];
-    push(@{$ready{$ship->{type}}}, $ship);
-  }
-  my @sending;
-  for my $type (keys(%{$requests{$body_id}})) {
-    my $n = $requests{$body_id}{$type};
-    while ($n > 0) {
-      last unless $ready{$type} && @{$ready{$type}};
-      push(@sending, shift(@{$ready{$type}}));
-      $n--;
-    }
-  }
-
-  send_many_ships("sending %s to $planets->{$body_id} with:\n",
-                  $trade->{id}, $body_id, \@sending, \@ships);
 }
 
 # Send all returns back to the yard planet
@@ -256,6 +291,76 @@ sub send_ships {
   return 1;
 }
 
+# Ensure number of ships available
+sub manage_ship_count {
+  my $body_id = shift;
+  my $name_template = shift;
+  my $type = shift;
+  my $min = shift;
+  my $max = shift;
+  my @ships = @_;
+
+  my $attribute = "hold_size";
+  $attribute = "combat" if $type eq "drone";
+  $attribute = "speed"  if $type eq "excavator";
+
+  my $name_pattern = $name_template;
+  $name_pattern =~ s/(\W)/\\$1/g;
+  $name_pattern =~ s/\\#\\#/\\w+/g;
+  $name_pattern =~ s/\\#/\\d+/g;
+
+  my @class = grep { $_->{type} eq $type } @ships;
+  my $good_name = @class ? "Managed $class[0]{type_human}" : "";
+  my @ordered = sort { is_obsolete($a)  <=> is_obsolete($b)  ||
+                       $b->{$attribute} <=> $a->{$attribute} ||
+                       ($a->{reserved} || 0) <=> ($b->{reserved} || 0) ||
+                       ($a->{task} eq "Supply Chain")  <=> ($b->{task} eq "Supply Chain") ||
+                       ($a->{task} eq "Waste Chain")   <=> ($b->{task} eq "Waste Chain")  ||
+                       ($b->{name} =~ /$name_pattern/) <=> ($a->{name} =~ /$name_pattern/) } @class;
+  my @good = splice(@ordered, 0, $min);
+  for (($min+1)..$max) { push(@good, shift(@ordered)) if @ordered && $ordered[0]{task} !~ /Chain$/ && !$ordered[0]{reserved}; }
+  $_->{reserved} = 1 for @good;
+  name_ships_by_template($body_id, $name_template, @good);
+  $client->name_ship($body_id, $_->{id}, $_->{name} = "$_->{type_human} $_->{level}") for grep { $_->{name} =~ /$name_pattern/ } @ordered;
+  my @current = grep { !is_obsolete($_) } @good;
+  if (@current < $min) {
+    $requests{$body_id}{$type} = $max - @current;
+  }
+  $scuttles{$body_id} ||= [];
+  $returns{$body_id}  ||= [];
+  $scuttles{$body_id} = [ grep { $_->{type} ne $type } @{$scuttles{$body_id}} ];
+  $returns{$body_id}  = [ grep { $_->{type} ne $type } @{$returns{$body_id}}  ];
+  push(@{$scuttles{$body_id}}, grep { $_->{task} eq "Docked" &&  is_obsolete($_) } @ordered);
+  push(@{$returns{$body_id}},  grep { $_->{task} eq "Docked" && !is_obsolete($_) } @ordered);
+}
+
+sub name_ships_by_template {
+  my $body_id = shift;
+  my $name_template = shift;
+  my @ships = @_;
+
+  my @greek = qw(- alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega);
+
+  my @names;
+  for my $j (1..@ships) {
+    my $name = $name_template;
+    $name =~ s/##/$greek[$j]/g;
+    $name =~ s/#/$j/g;
+
+    my $match = first { $_->{name} eq $name } @ships;
+    if ($match) {
+      @ships = grep { $_->{id} ne $match->{id} } @ships;
+    } else {
+      push(@names, $name);
+    }
+  }
+
+  for my $name (@names) {
+    my $ship = shift @ships;
+    $client->name_ship($body_id, $ship->{id}, $ship->{name} = $name);
+  }
+}
+
 # Ensure sufficient hulks in supply chain for 110%
 sub manage_supply_ships {
   my $body_id = shift;
@@ -263,6 +368,8 @@ sub manage_supply_ships {
 
   my $port = eval { $client->find_building($body_id, "Space Port") };
   my $best_supply = first { $_->{attributes}{berth_level} <= $port->{level} } @supply_ships;
+
+
   # fetch supply chains
   # determine capacity * distance required
   # determine ship count needed
@@ -351,6 +458,7 @@ sub scuttle_ships {
   my $body_id = shift;
   my @ships = @_;
 
+  printf("Scuttling %d obsolete ships on %s\n", scalar(@ships),  $planets->{$body_id}) if @ships;
   for my $ship (@ships) {
     eval {
       $client->scuttle_ship($body_id, $ship->{id});

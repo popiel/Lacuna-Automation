@@ -645,6 +645,18 @@ sub scuttle_ship {
   return $result;
 }
 
+sub name_ship {
+  my $self = shift;
+  my $body_id = shift;
+  my $ship_id = shift;
+  my $name = shift;
+
+  my $result = $self->call(spaceport => name_ship =>
+                           scalar($self->find_building($body_id, "Space Port"))->{id}, $ship_id, $name);
+  $self->cache_invalidate( type => 'spaceport_view_all_ships',  id => $body_id );
+  return $result;
+}
+
 sub view_excavators {
   my $self = shift;
   my $body_id = shift;

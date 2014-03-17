@@ -16,11 +16,13 @@ autoflush STDERR 1;
 my $config_name = "config.json";
 my $debug = 0;
 my $quiet = 0;
+my $skip_invalidate = 0;
 
 GetOptions(
   "config=s"  => \$config_name,
   "debug"     => \$debug,
   "quiet"     => \$quiet,
+  "skip_invalidate" => \$skip_invalidate,
 ) or die "$0 --config=foo.json --body=Bar\n";
 
 my $client = Client->new(config => $config_name);
@@ -46,6 +48,7 @@ sub match_planet {
 }
 
 my $lottery;
+my $invalidations = 0;
 
 for (;;) {
   my @trash;
@@ -73,19 +76,35 @@ for (;;) {
         push(@trash, $message->{id});
       }
     }
-    if (grep(/Excavator/, @{$message->{tags}}) &&
+    if ($message->{subject} =~ /Transport Workers Strike/) {
+      emit("Trashing $message->{id}") if $debug;
+      push(@trash, $message->{id});
+    }
+    if ($message->{subject} =~ /Civil Unrest/) {
+      emit("Trashing $message->{id}") if $debug;
+      push(@trash, $message->{id});
+    }
+    if (grep(/Parliament/, @{$message->{tags}}) &&
+        $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair|Seize)/) {
+      emit("Trashing $message->{id}") if $debug;
+      push(@trash, $message->{id});
+    }
+    if ( # grep(/Excavator/, @{$message->{tags}}) &&
         $message->{subject} =~ /Excavator Results|Excavator Deployed/) {
       # my $detail = $client->call(inbox => read_message => $message->{id});
-      my $detail = $client->mail_message($message->{id});
-      my $body_id = '';
-      $body_id = $1 if $detail->{message}{body} =~ /\{Planet (\d+)/;
-      my @replacements = grep { $_->[1] eq "Replace" && $_->[2] !~ /^Fail/ } @{$detail->{message}{attachments}{table}};
-      my @targets = map { $_->[0] } @replacements;
-      push(@targets, $1) if !@replacements && $detail->{message}{body} =~ /deployed on \{Starmap -?\d+ -?\d+ ([^}]+)\}/;
-      if (@targets) {
-        emit("Excavator replacement for ".join(", ", @targets)."; invalidating ship list.", $body_id);
-        $client->cache_invalidate( type => 'spaceport_view_all_ships', id => $body_id );
-        $client->cache_invalidate( type => 'excavators',               id => $body_id );
+      if (!$skip_invalidate) {
+        my $detail = $client->mail_message($message->{id});
+        my $body_id = '';
+        $body_id = $1 if $detail->{message}{body} =~ /\{Planet (\d+)/;
+        my @replacements = grep { $_->[1] eq "Replace" && $_->[2] !~ /^Fail/ } @{$detail->{message}{attachments}{table}};
+        my @targets = map { $_->[0] } @replacements;
+        push(@targets, $1) if !@replacements && $detail->{message}{body} =~ /deployed on \{Starmap -?\d+ -?\d+ ([^}]+)\}/;
+        if (@targets) {
+          emit("Excavator replacement for ".join(", ", @targets)."; invalidating ship list.", $body_id);
+          $client->cache_invalidate( type => 'spaceport_view_all_ships', id => $body_id );
+          $client->cache_invalidate( type => 'excavators',               id => $body_id );
+          if ($invalidations++ > 20) { $skip_invalidate = 1; }
+        }
       }
       emit("Trashing $message->{id}") if $debug;
       push(@trash, $message->{id});
@@ -101,12 +120,12 @@ for (;;) {
       push(@archive, $message->{id});
       # forward
     }
-    if (grep(/Probe/, @{$message->{tags}}) && !$message->{has_read}) {
-      my $detail = $client->call(inbox => read_message => $message->{id});
-      if ($detail->{message}{body} =~ /\{Empire \d+ (last|kiamo|fireartist|Cryptomega|Kreeact)\}/) {
+    if (grep(/Probe/, @{$message->{tags}})) {
+#      my $detail = $client->call(inbox => read_message => $message->{id});
+#      if ($detail->{message}{body} =~ /\{Empire \d+ (last|kiamo|fireartist|Cryptomega|Kreeact)\}/) {
         emit("Trashing $message->{id}") if $debug;
         push(@trash, $message->{id});
-      }
+#      }
     }
     
   }

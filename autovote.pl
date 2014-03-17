@@ -49,12 +49,14 @@ for my $body_id (keys(%$planets)) {
   }
 }
 
+exit(0);
+
 my @trash;
 my $inbox = $client->mail_inbox();
 emit("inbox result: ".encode_json($inbox)) if $debug;
 for my $message (@{$inbox->{messages}}) {
   emit("Inspecting message tag '@{$message->{tags}}'; subject '$message->{subject}'") if $debug;
-  if ((grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair)/) ||
+  if ((grep(/Parliament/, @{$message->{tags}}) && $message->{subject} =~ /^(Pass: )?(Upgrade|Install|Repair|Seize)/) ||
       ($glyph && grep(/Alert/, @{$message->{tags}}) && $message->{subject} eq "Glyph Discovered!") ||
       ($overflow && grep(/Complaint/, @{$message->{tags}}) && $message->{subject} eq 'Wasting Resources') ||
       ($spy && grep(/Spies|Intelligence/, @{$message->{tags}}) && $message->{subject} =~ /Put Me To Work|Mission Objective Missing|Appropriation Report/)) {
