@@ -36,7 +36,7 @@ GetOptions(
 ) or usage ();
 usage () if ( $help );
  
-my $client = Client->new(config => $config_name, rpc_sleep => 1;
+my $client = Client->new(config => $config_name, rpc_sleep => 1);
 my $rpccount = $client->empire_status->{rpc_count};
 my $empire_name = $client->empire_status->{name};
 do {
