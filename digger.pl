@@ -197,3 +197,17 @@ sub emit_json {
   print Client::format_time(time())." $message:\n";
   print JSON::XS->new->allow_nonref->canonical->pretty->encode($hash);
 }
+
+# Spirithawke
+# It no longer needs to be run from an batch file to loop, it is also possible to have it skip all the pattern named Space Stations. Other minor error fixing too.
+# Just run it like this
+# perl digger3.pl --skipSS "^(S|Z)ASS" --repeat
+# Edit the --skipSS switch for your alliance's space stations ;)
+# Still requires Lacuna Automation
+
+#hmm....lemme think....this is what I had worked out for a culture player:
+#SS,ZZ,ZSS, Z SS
+#--skipSS "^(S|Z|Z )S|Z"
+#ours in SMA is simpler
+#--skipSS "^(S|Z)ASS"
+#for SASS and ZASS
