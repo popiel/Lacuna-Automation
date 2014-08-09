@@ -205,9 +205,15 @@ sub emit_json {
 # Edit the --skipSS switch for your alliance's space stations ;)
 # Still requires Lacuna Automation
 
-#hmm....lemme think....this is what I had worked out for a culture player:
-#SS,ZZ,ZSS, Z SS
-#--skipSS "^(S|Z|Z )S|Z"
-#ours in SMA is simpler
-#--skipSS "^(S|Z)ASS"
-#for SASS and ZASS
+# hmm....lemme think....this is what I had worked out for a culture player:
+# SS,ZZ,ZSS, Z SS
+# --skipSS "^(S|Z|Z )S|Z"
+# ours in SMA is simpler
+# --skipSS "^(S|Z)ASS"
+# for SASS and ZASS
+# so yall's stations have 1-4 Zs in front of them?
+# even to 5 --RedOrion
+# this might work....
+# wait 5?
+# sec
+# --skipSS "^(Z |ZZ |ZZZ |ZZZZ |ZZZZZ )"
