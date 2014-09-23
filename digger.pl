@@ -1,20 +1,22 @@
 #!/usr/bin/perl
- 
+
+use v5.14;
 use strict;
 use warnings;
 use Carp;
 use Client;
 use DBI;
+use Data::Dumper; $Data::Dumper::Indent = 1;
 use Getopt::Long;
 use IO::Handle;
 use JSON::XS;
 use List::Util qw(min max sum first);
 use File::Path;
 use POSIX qw(strftime);
- 
+
 autoflush STDOUT 1;
 autoflush STDERR 1;
- 
+
 my $help = 0;
 my $config_name = "config.json";
 my @body_names;
@@ -23,7 +25,7 @@ my $noaction = 0;
 my $quiet = 0;
 my $repeat = 0;
 my $skipSS = 0;
- 
+
 GetOptions(
   "help"    => \$help,
   "config=s"  => \$config_name,
@@ -35,11 +37,17 @@ GetOptions(
   'skipSS=s'  => \$skipSS,
 ) or usage ();
 usage () if ( $help );
- 
-my $client = Client->new(config => $config_name, rpc_sleep => 1);
-my $rpccount = $client->empire_status->{rpc_count};
-my $empire_name = $client->empire_status->{name};
+
+my $client;
+my $rpccount;
+my $empire_name;
+my $restart = 0;
+my $sleepy = 0;
+
 do {
+    $client = Client->new(config => $config_name, rpc_sleep => 1);
+    $rpccount = $client->empire_status->{rpc_count};
+    $empire_name = $client->empire_status->{name};
     print "Starting RPC: $rpccount\n";
     my $planets = $client->empire_status->{planets};
     my $skipping = 1 unless @body_names;
@@ -58,14 +66,14 @@ do {
     }
     @body_ids = sort { $planets->{$a} cmp $planets->{$b} } @body_ids;
     @body_names = map { $planets->{$_} } @body_ids;
- 
+
     my %arches = map { ($_, scalar(eval { $client->find_building($_, "Archaeology Ministry") } )) } @body_ids;
     @body_ids = grep { $arches{$_} && $arches{$_}{level} } @body_ids;
- 
+
     emit("Looking at bodies ".join(', ', @body_names));
- 
+### Made a new workaround, for those times the script crashes and you need to restart it, so I am killing this next line.
 #    exit(0) unless $noaction || grep { $_ && !($_->{work}{end} && Client::parse_time($_->{work}{end}) >= time()) } values(%arches);
- 
+
     my %glyphs;
     for my $body_id (@body_ids) {
       my $summary = eval { $client->glyph_list($body_id) };
@@ -75,7 +83,7 @@ do {
       }
       $glyphs{$_->{name}} += $_->{quantity} for @{$summary->{glyphs}};
     }
- 
+
     my @recipes = (
       [ qw(goethite halite gypsum trona) ],
       [ qw(gold anthracite uraninite bauxite) ],
@@ -83,7 +91,7 @@ do {
       [ qw(monazite fluorite beryl magnetite) ],
       [ qw(rutile chromite chalcopyrite galena) ],
     );
- 
+
     my %bias;
     for my $recipe (@recipes) {
       my @sorted = sort { $a <=> $b } map { $glyphs{$_} || 0 } @$recipe;
@@ -94,9 +102,24 @@ do {
       emit(sprintf("%5d %-12s %5d %-12s %5d %-12s %5d %-12s", map { $glyphs{$_}, $_ } @$recipe));
       emit(sprintf("  %5d %-12s %5d %-12s %5d %-12s %5d %-12s", map { $bias{$_}, "bias" } @$recipe));
     }
- 
+
     for my $body_id (@body_ids) {
       my $end = Client::parse_time($arches{$body_id}{work}{end}) || 0;
+      ### New code to detect if you are restarting the script for some reason before the first planet that would
+      ### normally be checked has finished it's current dig (the script crashed, comp died, etc). If that first
+      ### planet is still digging, go to sleep until it finishes, then continue onwards.
+      if ( $restart == 0 && $end > time() ) {
+        $restart++;
+        my $secs = (($end - time())+30);
+        my $then = Client::format_time((time())+$secs);
+		my $cplanet = $planets->{$body_id};
+        say "This Archministry on $cplanet is still digging, sleeping for ",sec2str($secs),".  Will continue at $then.";
+        sleep $secs;
+        say "Continuing now.";
+        }
+      elsif ( $restart == 0 ) {
+        $restart++;
+      } ### End of new code.
       next if $end > time();
       my $ores = $client->ores_for_search($arches{$body_id}{id});
       my @ores = sort { $bias{$a} <=> $bias{$b} } keys (%{$ores->{ore}});
@@ -117,7 +140,7 @@ do {
         } else {
           my %stored = %{$result->{stored}};
           my %stash  = %{$result->{stash}};
- 
+
           @ores = sort { $bias{$a} <=> $bias{$b} } keys %bias;
           @ores = grep { $stash{$_} >= 10000 && $bias{$_} <= 0 } @ores;
           if (!@ores) {
@@ -145,20 +168,20 @@ do {
       }
     }
     $rpccount = $client->empire_status->{rpc_count};
-    print "Ending RPC: $rpccount\n";
+    say "Ending RPC: $rpccount";
     if ( $repeat ) {
-        print "Sleeping for 6 hours.\n\n";
+        say "Sleeping for 6 hours. Will restart at: ".(Client::format_time((time())+21600))."\n";
         sleep 21600;
     }
 } while ($repeat);
- 
+
 sub usage {
     diag(<<END);
 Usage: $0 [options]
- 
+
 This program performs automatic digging for glyphs at each of your planets that
 has an Archeology Ministry.  Requires Lacuna Automation to function.
- 
+
 Options:
   --help             - This info.
   --config "FILE"    - Specify an config file, normally config.json
@@ -171,16 +194,16 @@ Options:
   --skipSS "STRING"  - Skips bodies (Space Stations) if regex is matched.
                        Example use:  --skipSS "^(S|Z)ASS"
                        The above skips all SS starting with SASS or ZASS.
- 
+
 END
   exit 1;
 }
- 
+
 sub diag {
     my ($msg) = @_;
     print STDERR $msg;
 }
- 
+
 sub emit {
   my $message = shift;
   my $prefix = shift;
@@ -189,7 +212,7 @@ sub emit {
   $prefix = $planets->{$prefix} if $planets->{$prefix};
   print Client::format_time(time())." digger: $prefix: $message\n";
 }
- 
+
 sub emit_json {
   return unless $debug;
   my $message = shift;
@@ -198,22 +221,14 @@ sub emit_json {
   print JSON::XS->new->allow_nonref->canonical->pretty->encode($hash);
 }
 
-# Spirithawke
-# It no longer needs to be run from an batch file to loop, it is also possible to have it skip all the pattern named Space Stations. Other minor error fixing too.
-# Just run it like this
-# perl digger3.pl --skipSS "^(S|Z)ASS" --repeat
-# Edit the --skipSS switch for your alliance's space stations ;)
-# Still requires Lacuna Automation
+sub sec2str {
+  my ($sec) = @_;
 
-# hmm....lemme think....this is what I had worked out for a culture player:
-# SS,ZZ,ZSS, Z SS
-# --skipSS "^(S|Z|Z )S|Z"
-# ours in SMA is simpler
-# --skipSS "^(S|Z)ASS"
-# for SASS and ZASS
-# so yall's stations have 1-4 Zs in front of them?
-# even to 5 --RedOrion
-# this might work....
-# wait 5?
-# sec
-# --skipSS "^(Z |ZZ |ZZZ |ZZZZ |ZZZZZ )"
+  my $day = int($sec/(24 * 60 * 60));
+  $sec -= $day * 24 * 60 * 60;
+  my $hrs = int( $sec/(60*60));
+  $sec -= $hrs * 60 * 60;
+  my $min = int( $sec/60);
+  $sec -= $min * 60;
+  return sprintf "%02dH:%02dM:%02dS", $hrs, $min, $sec;
+}
