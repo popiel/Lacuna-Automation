@@ -108,19 +108,22 @@ do {
       ### New code to detect if you are restarting the script for some reason before the first planet that would
       ### normally be checked has finished it's current dig (the script crashed, comp died, etc). If that first
       ### planet is still digging, go to sleep until it finishes, then continue onwards.
+      my $cplanet = $planets->{$body_id};
       if ( $restart == 0 && $end > time() ) {
         $restart++;
         my $secs = (($end - time())+30);
         my $then = Client::format_time((time())+$secs);
-		my $cplanet = $planets->{$body_id};
         say "This Archministry on $cplanet is still digging, sleeping for ",sec2str($secs),".  Will continue at $then.";
         sleep $secs;
         say "Continuing now.";
         }
       elsif ( $restart == 0 ) {
         $restart++;
+      }
+      if ( $end > time() ) {
+        say "This Archministry on $cplanet is still digging, skipping. Will be checked next run.";
+        next;
       } ### End of new code.
-      next if $end > time();
       my $ores = $client->ores_for_search($arches{$body_id}{id});
       my @ores = sort { $bias{$a} <=> $bias{$b} } keys (%{$ores->{ore}});
       @ores = grep { $bias{$_} < 0 } @ores;
