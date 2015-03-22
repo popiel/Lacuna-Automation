@@ -174,7 +174,7 @@ do {
     say "Ending RPC: $rpccount";
     if ( $repeat ) {
         say "Sleeping for 6 hours. Will restart at: ".(Client::format_time((time())+21600))."\n";
-        sleep 21600;
+        sleep 21000;
     }
 } while ($repeat);
 
