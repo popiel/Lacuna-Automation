@@ -294,7 +294,8 @@ sub match_planet {
   my $self = shift;
   my $name = shift;
   my $planets = $self->empire_status->{planets};
-  my @candidates = grep { $planets->{$_} =~ /$name/ } keys %$planets;
+  my $qm_name = quotemeta $name;
+  my @candidates = grep { $planets->{$_} =~ /^$qm_name$/ } keys %$planets;
   return $candidates[0] if @candidates == 1;
   LacunaRPCException->throw(code => 1002, text => "Planet name $name not found") unless @candidates;
   LacunaRPCException->throw(code => 1002, text => "Planet name $name is ambiguous",
