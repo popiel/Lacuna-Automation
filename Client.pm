@@ -29,7 +29,10 @@ sub new {
   my $self = ref($base) ? { %$base, @_ } : { @_ };
   bless($self, $class);
   $self->read_config();
-  $self->{ua} ||= LWP::UserAgent->new();
+  unless ($self->{ua}) {
+    $self->{ua} = LWP::UserAgent->new();
+    $self->{ua}->agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36");
+  }
   $self->{cache_root} ||= 'cache';
   $self->{total_calls} = 0;
   return $self;

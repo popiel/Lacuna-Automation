@@ -2,6 +2,11 @@
 
 use strict;
 
+BEGIN {
+  @INC = (@INC, ".", "local/lib/perl5");
+}
+
+
 use Getopt::Long;
 use JSON::PP;
 use List::Util;

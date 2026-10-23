@@ -4,6 +4,11 @@
 
 use strict;
 
+BEGIN {
+  @INC = (@INC, ".", "local/lib/perl5");
+}
+
+
 use Carp;
 use Client;
 use Getopt::Long;

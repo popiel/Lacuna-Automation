@@ -5,6 +5,11 @@
 # so not good for higher usage or farther away stations
 
 use strict;
+
+BEGIN {
+  @INC = (@INC, ".", "local/lib/perl5");
+}
+
 use warnings;
 
 use Carp;

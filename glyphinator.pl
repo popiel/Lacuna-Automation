@@ -23,6 +23,11 @@
 #   *) When excavators will be finished building
 
 use strict;
+
+BEGIN {
+  @INC = (@INC, ".", "local/lib/perl5");
+}
+
 use warnings;
 
 use feature ':5.10';
