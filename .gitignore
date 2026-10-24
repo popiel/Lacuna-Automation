@@ -8,3 +8,4 @@ build.log
 resource.log
 .*.swp
 logs/
+captcha/
