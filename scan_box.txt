@@ -1,0 +1,14 @@
+All 12 stars in its scan box (x 236..265, y −514..−485), sorted by distance from Tchurnoendeu:
+#	star			x	y	zone	color	dist	cheby
+1	Pri Rhiostia Iagr	237	−487	0|−1	red	555.46	537
+2	Stie Otraing Upr	252	−487	1|−1	red	559.48	537
+3	Eab Zima Moo		245	−493	0|−1	yellow	563.34	543
+4	Aek Ghesse		239	−495	0|−1	green	563.70	545
+5	Aetch Ootchoend Wae	260	−490	1|−1	red	564.65	540
+6	Klow Evioll		254	−497	1|−1	green	569.64	547
+7	Aestroast		246	−500	0|−2	red	570.35	550
+8	Mio Lyeghi Cui		237	−508	0|−2	magenta	575.78	558
+9	Grae Oacklich Gi	252	−505	1|−2	red	576.78	555
+10	Eandeuxyo		261	−503	1|−2	green	577.38	553
+11	Eequ Eggipl Eey		246	−510	0|−2	green	580.00	560
+12	Etr Veppoo Eew		261	−512	1|−2	yellow	586.00	562

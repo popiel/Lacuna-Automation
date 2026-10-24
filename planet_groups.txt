@@ -1,0 +1,27 @@
+All planet types allowed (9,809 qualifying sets — P33 dominates as expected):
+total	set	worst ore	max
+54,044	P25 P28 P32 P33	trona	5501
+53,136	P15 P25 P32 P33	kerogen	7501
+53,136	P15 P28 P32 P33	gold	10,000
+53,047	P21 P25 P32 P33	halite	9002
+53,047	P21 P28 P32 P33	chalcopyrite	10,501
+53,047	P22 P25 P32 P33	uraninite	10,001
+53,047	P22 P28 P32 P33	chalcopyrite	9501
+53,047	P25 P32 P33 P38	uraninite	8002
+53,047	P28 P32 P33 P38	chalcopyrite	8002
+53,046	P17 P25 P32 P33	uraninite	7201
+
+If you exclude P33/P35 (633 qualifying sets — the interesting case), the top ten is:
+total	set	worst ore	max
+43,049	P11 P12 P25 P32	uraninite	5002
+43,049	P11 P12 P28 P32	chalcopyrite	5501
+42,141	P11 P12 P15 P32	gold	7501
+42,060	P25 P28 P31 P34	chromite	4003
+42,052	P11 P12 P21 P32	chalcopyrite	9002
+42,052	P11 P12 P22 P32	chalcopyrite	6002
+42,052	P11 P12 P32 P38	chalcopyrite	8002
+42,051	P11 P12 P17 P32	chalcopyrite	7201
+42,051	P11 P12 P18 P32	chalcopyrite	7201
+42,051	P11 P12 P23 P32	chalcopyrite	4502
+
+Pattern: the no-P33 hierarchy is really just P11+P12 (the 10/10 complement pair) + P32 + one strong "big-pool" planet (P25/P28 best; P31/P34 alternative seen in P25 P28 P31 P34). Every qualifying set still clears 1000 on every ore — the min column never drops below 1003 in any of these.

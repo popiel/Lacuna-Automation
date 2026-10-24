@@ -213,6 +213,16 @@ sub call {
   $self->{session_id} = $result->{result}{session_id} if $result->{result}{session_id};
   $self->{session_time} = time();
   $self->write_session if $self->{session_id};
+  if (ref $result->{result}{status} eq 'HASH') {
+    my $status = $result->{result}{status};
+    if (ref $status->{server} eq 'HASH') {
+      $self->{server_status} = $status->{server};
+      $self->{rpc_limit} = $status->{server}{rpc_limit} if exists($status->{server}{rpc_limit});
+    }
+    if (ref $status->{empire} eq 'HASH' && exists($status->{empire}{rpc_count})) {
+      $self->{rpc_count} = $status->{empire}{rpc_count};
+    }
+  }
   my $time = parse_time($result->{result}{status}{server}{time});
   $result->{result}{status}{_time} = $time;
   my $empire = $result->{result}{status}{empire};
@@ -277,7 +287,9 @@ sub empire_status {
   my $result = $self->cache_read( type => 'empire_status', stale => 610 );
   $result && return $result;
 
-  $result = $self->call(empire => login => $self->{empire_name}, $self->{empire_password}, $self->{api_key})->{status}{empire};
+  $result = $self->call(empire => login => $self->{empire_name}, $self->{empire_password}, $self->{api_key});
+  $self->{server_status} = $result->{status}{server} if $result->{status}{server};
+  $result = $result->{status}{empire};
   return $result || croak "Couldn't get empire status";
 }
 

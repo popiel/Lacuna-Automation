@@ -15,7 +15,7 @@ use JSON::PP;
 my $config_name = "config.json";
 my $body_name = "";
 my $name = "Trade|Subspace|Mission|Port";
-my $every = "Warehouse";
+my $every = ".";
 
 GetOptions(
   "config=s" => \$config_name,
