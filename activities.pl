@@ -31,9 +31,6 @@ GetOptions(
 
 my $client = Client->new(config => $config_name);
 my $empire = $client->empire_status;
-my $rpc_count = $client->{rpc_count} // $empire->{rpc_count} // 0;
-my $rpc_limit = $client->{rpc_limit} // $client->{server_status}{rpc_limit} // 2000;
-printf("RPC usage today: %d / %s\n", $rpc_count, $rpc_limit);
 my $planets = $empire->{planets};
 
 for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys %$planets) {
@@ -62,3 +59,7 @@ for my $body_id (sort { $planets->{$a} cmp $planets->{$b} } keys %$planets) {
   print "  NO CONSTRUCTION!\n" unless $construction;
   print "\n";
 }
+
+my $rpc_count = $client->{rpc_count} // $empire->{rpc_count} // 0;
+my $rpc_limit = $client->{rpc_limit} // $client->{server_status}{rpc_limit} // 2000;
+printf("RPC usage today: %d / %s\n", $rpc_count, $rpc_limit);
