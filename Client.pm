@@ -1222,6 +1222,7 @@ sub present_captcha {
     -d 'captcha' or mkdir 'captcha';
     my $file;
     open($file, ">", $filename) or die "Couldn't write captcha image: $filename: $!\n";
+    binmode($file);    # the PNG is binary; without this, Windows CRLF-translates it into garbage
     print $file $image;
     close($file);
     open($file, "-|", "$self->{captcha_program} $filename") or die "Couldn't run captcha presenter: $!\n";
