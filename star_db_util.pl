@@ -128,13 +128,16 @@ if ($opts{'merge-db'}) {
     $star_db->{AutoCommit} = 0;
 
     # Copy stars
+    # LEFT JOIN is required: an inner join would exclude stars missing from
+    # the target db, so they would never reach the insert path below.
     my $get_stars;
     my $ok = eval {
         $get_stars = $star_db->prepare(<<SQL);
 select s2.*, strftime('%s', s2.last_checked) checked_epoch
 from d2.stars s2
-join stars s1 on s1.id = s2.id
-    and s2.last_checked > coalesce(s1.last_checked,0)
+left join stars s1 on s1.id = s2.id
+where s1.id is null
+   or s2.last_checked > coalesce(s1.last_checked, 0)
 SQL
         $get_stars->execute;
         return 1;
@@ -161,14 +164,17 @@ SQL
     }
 
     # Copy orbitals
+    # LEFT JOIN is required: an inner join would exclude orbitals missing
+    # from the target db, so they would never reach the insert path below.
     my $get_orbitals;
     $ok = eval {
         $get_orbitals = $star_db->prepare(<<SQL);
 select o2.*, strftime('%s', o2.last_checked) checked_epoch
 from d2.orbitals o2
-join orbitals o1 on o1.star_id = o2.star_id
+left join orbitals o1 on o1.star_id = o2.star_id
     and o1.orbit = o2.orbit
-    and o2.last_checked > coalesce(o1.last_checked,0)
+where o1.star_id is null
+   or o2.last_checked > coalesce(o1.last_checked, 0)
 SQL
         $get_orbitals->execute;
         return 1;

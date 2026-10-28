@@ -397,6 +397,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
     }
   }
   if ($command =~ /^shipbuild (.*)/o) {
+    # barge, bleeder, cargo_ship, colony_ship, detonator, dory, drone, excavator, fighter, fissure_sealer, freighter, galleon, gas_giant_settlement_ship, hulk, hulk_fast, hulk_huge, mining_platform_ship, observatory_seeker, placebo, placebo2, placebo3, placebo4, placebo5, placebo6, probe, scanner, scow, scow_fast, scow_large, scow_mega, security_ministry_seeker, short_range_colony_ship, smuggler_ship, snark, snark2, snark3, space_station, spaceport_seeker, spy_pod, spy_shuttle, stake, supply_pod, supply_pod2, supply_pod3, supply_pod4, supply_pod5, surveyor, sweeper, terraforming_platform_ship, thud
     my $name = $1;
 
     my @buildings = values(%{$buildings->{buildings}});
