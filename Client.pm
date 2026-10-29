@@ -1213,6 +1213,7 @@ sub boost_aspect {
 sub present_captcha {
   my ($self, $captcha) = @_;
   $captcha ||= $self->call(captcha => "fetch");
+  my $fetched_at = time();
   for (;;) {
     warn("Fetched captcha guid $captcha->{guid}\n");
     my $c_response = $self->{ua}->get($captcha->{url});
@@ -1232,8 +1233,13 @@ sub present_captcha {
     $answer =~ s/^ANSWER: //;
     if (!$answer) {
       $captcha = $self->call(captcha => "fetch");
+      $fetched_at = time();
       next;
     }
+    # Let 10-30 seconds (inclusive) elapse between fetching a captcha and
+    # submitting its solution; a slow human answer needs no extra wait.
+    my $delay = int(10 + rand 21);
+    sleep($delay - (time() - $fetched_at)) if $delay > time() - $fetched_at;
     my $response = eval { $self->call(captcha => solve => $captcha->{guid}, $answer) };
     if ($response eq "wrong") {
       open($file, ">", "$filename.wrong") or die "Couldn't write captcha answer: $!\n";

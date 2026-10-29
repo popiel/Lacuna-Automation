@@ -11,3 +11,5 @@ if %MMN% LSS 5 (
   echo ======== trashman started %date% %time% >> "logs\trashman.log"
   C:\Strawberry\perl\bin\perl.exe trashman.pl --body=Noseeum --time=55m >> "logs\trashman.log" 2>&1
 )
+
+C:\Strawberry\perl\bin\perl.exe entertainment.pl --daily >> "logs\entertainment.log" 2>&1
