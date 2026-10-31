@@ -674,11 +674,17 @@ sub upgrade_check {
       if $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_};
   }
   return "Not enough ".join(", ", @message)." in storage to build this." if @message;
+  # Local pre-check, no server call.  upgrade.production.X_hour is the
+  # building's net X rate at the next level, so a negative delta is extra
+  # consumption to sustain and a positive delta (producer buildings, e.g.
+  # Geo Energy Plant, Planetary Command Center) actually helps the planet;
+  # only a non-negative post-upgrade planet total may block.
   for (qw(food ore water energy)) {
-    push(@message, "$_ (".($status->{"${_}_hour"} - $building->{upgrade}{production}{"${_}_hour"} + $building->{"${_}_hour"})."/hour)")
-      if $status->{"${_}_hour"} < $building->{upgrade}{production}{"${_}_hour"} - $building->{"${_}_hour"};
+    my $delta = $building->{upgrade}{production}{"${_}_hour"} - $building->{"${_}_hour"};
+    push(@message, "$_ (".($status->{"${_}_hour"} + $delta)."/hour post-upgrade)")
+      if $delta < 0 && $status->{"${_}_hour"} < -$delta;
   }
-  return "Unsustainable. Not enough ".join(", ", @message)." production." if @message;
+  return "Unsustainable (local pre-check): not enough ".join(", ", @message)." production" if @message;
   my $view = $client->building_view($building->{url}, $building->{id})->{building};
   return $view->{upgrade}{reason}[1] unless $view->{upgrade}{can};
   return;
