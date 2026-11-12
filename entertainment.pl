@@ -43,11 +43,13 @@ use Time::Local qw(timelocal);
 
 my $config_name = "config.json";
 my $daily = 0;
+my $at = "";
 
 GetOptions(
     "config=s" => \$config_name,
     "daily"    => \$daily,
-) or die "$0 [--config=foo.json] [--daily]\n";
+    "at=s"     => \$at,
+) or die "$0 [--config=foo.json] [--daily] [--at=HH:MM]\n";
 
 my $state_file     = "entertainment.queue";
 my $window_start   = 18 * 60;            # minutes: 6:00pm local
@@ -67,8 +69,9 @@ roll_state() unless ($state->{date} // "") eq today();
 
 if ($daily) {
     my $now_min = (localtime)[2] * 60 + (localtime)[1];
+    $now_min = $1 * 60 + $2 if $at =~ /^(\d{1,2}):(\d{2})$/;    # test hook: pretend it is HH:MM
     exit 0 if $now_min >= $window_end;
-    exit 0 if $now_min < $window_start + 60 * $state->{start_min};
+    exit 0 if $now_min < $window_start + $state->{start_min};
 }
 
 # Checks before 23h55m past the last consumption can not find anything new;
@@ -86,7 +89,7 @@ if (defined(my $confirmed = confirmed_epoch())) {
 
 my $client = Client->new(config => $config_name);
 
-discover() unless keys(%{$state->{zones}});
+discover();
 
 my $config = probe();
 delete $state->{confirmed_at};
@@ -202,11 +205,30 @@ sub discover {
         my @buildings = map { { %{$buildings->{buildings}{$_}}, id => $_, body_id => $id } }
                         keys(%{$buildings->{buildings}});
         my $ed = (grep { $_->{name} eq $ed_name } @buildings)[0];
-        next unless $ed;
         my $zone = $buildings->{status}{body}{zone};
-        next if exists $state->{zones}{$zone};  # one district covers its whole zone
-        $state->{zones}{$zone} = { ed_id => $ed->{id}, body_id => $id, exhausted => 0 };
-        emit("found an entertainment district on $name covering zone $zone");
+        unless ($zone) {
+            emit("could not determine the zone of $name");
+            next;
+        }
+        if ($ed) {
+            my $prior = $state->{zones}{$zone} // {};
+            $state->{zones}{$zone} = {
+                ed_id     => $ed->{id},
+                body_id   => $id,
+                exhausted => $prior->{exhausted} // 0,
+            };
+            if (!$prior->{body_id}) {
+                emit("found an entertainment district on $name covering zone $zone");
+            }
+            elsif (($prior->{ed_id} // "") ne $ed->{id}) {
+                emit("updated entertainment district on $name covering zone $zone");
+            }
+        }
+        elsif (($state->{zones}{$zone}{body_id} // "") eq $id) {
+            # The planet was scanned successfully and no longer has a district.
+            delete $state->{zones}{$zone};
+            emit("$name no longer has an entertainment district; dropped zone $zone");
+        }
     }
     unless (keys %{$state->{zones}}) {
         emit("no entertainment districts anywhere; nothing to vote with");

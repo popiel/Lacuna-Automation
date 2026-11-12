@@ -17,6 +17,14 @@ When picking a zone corner to scan, verify against data already in the
 star database (`stars.db`, e.g. the `corner_scan` table or the stars'
 y-coordinates) rather than recomputing from the zone label alone.
 
+## Server/mission source
+
+A local clone of the `tlecommunity/v2` repo lives in `../lacuna_server`
+(sibling of this repo). Use it instead of fetching from the web. Mission
+definitions are in `../lacuna_server/mission/missions/*.mission`; each file's
+`max_university_level` is the highest university level at which the mission is
+still offered (see `bin/mission_check.pl`).
+
 ## Logging
 
 NEVER modify, clean, rewrite, or delete anything in existing log files (e.g.
