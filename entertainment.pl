@@ -16,11 +16,14 @@
 # With --daily (driven by the five-minute build queue job):
 #   * the first check of the day happens at a random time inside 6:00-6:30pm
 #     local; checks continue every five minutes until 9:00pm local
-#   * checks less than 23h55m after the last link was followed are skipped
-#     without any RPC calls, because nothing can have regenerated yet
-#   * an empty options list seen 24h15m or more after the last link was
-#     followed confirms every available link has been consumed and the
-#     cycle is done
+#   * each link's last use is tracked by its name, because following a link
+#     in one zone marks that link used for every zone
+#   * known link names are learned from the available-link pool itself; a
+#     name is dropped only after it has been absent from the pool for more
+#     than 48 hours
+#   * checks are skipped while every known link was followed within the last
+#     23h45m (none can have regenerated yet); probing continues until at
+#     least two link names are known, so a fresh install discovers the pool
 #   * a run which saw links distributed them across zones in one burst:
 #     one vote per zone per round-robin pass before any zone duplicates
 
@@ -57,9 +60,8 @@ my $window_end     = 21 * 60;            # minutes: 9:00pm local (exclusive)
 my $start_span     = 30;                 # first check: rand 0..29 minutes after window start
 my $click_base     = 10;                 # seconds between link visits
 my $click_jitter   = 15;                 # plus 0..14 seconds
+my $skip_within    = 23.75 * 60 * 60;    # links refresh 24h after use
 my $ed_name        = "Entertainment District";
-my $skip_before    = 24*60*60 - 15*60;   # 23h55m; nothing regenerates before this
-my $done_after     = 24*60*60 + 15*60;   # 24h15m; empty list then means cycle done
 
 my $lock;
 my $state;
@@ -74,48 +76,31 @@ if ($daily) {
     exit 0 if $now_min < $window_start + $state->{start_min};
 }
 
-# Checks before 23h55m past the last consumption can not find anything new;
-# only skip them when the previous burst's bookkeeping is in a settled state
-# (an interrupted burst clears the flag so leftovers get picked up).
-if (defined(my $last = used_epoch())) {
-    exit 0 if time() - $last < $skip_before && ($state->{settled} // 1);
-}
-
-# A probe already confirmed that nothing is pending; stop polling until the
-# same delay that governs new links has elapsed.
-if (defined(my $confirmed = confirmed_epoch())) {
-    exit 0 if time() < $confirmed + $skip_before;
-}
+# Each link refreshes 24h after its own last use, so while every known link
+# was followed within the last 23h45m none can have regenerated.  Keep
+# probing when fewer than two links are known so a fresh install can discover
+# the rest of the pool.  The settled flag keeps a burst interrupted after its
+# probe from hiding the links it had not actually followed yet.
+exit 0 if ($state->{settled} // 1) && known_links_consumed_recently();
 
 my $client = Client->new(config => $config_name);
 
 discover();
 
 my $config = probe();
-delete $state->{confirmed_at};
+
+$state->{settled} = 0;
+save_state();
 
 my @links = @{ $config->{options} // [] };
+track_links(map { $_->{name} } @links);
 unless (@links) {
-    # An empty pool is ambiguous: links may simply not have regenerated
-    # yet.  Once 24h15m have passed since the last link was followed, an
-    # empty pool proves every available link was followed and it is safe
-    # to stop polling for a while.
-    my $last = used_epoch();
-    if (defined($last) && time() - $last >= $done_after) {
-        $state->{confirmed_at} = strftime("%Y-%m-%d %H:%M:%S", localtime());
-        $state->{settled} = 1;
-        save_state();
-        emit("nothing pending: no links regenerated 24h15m after the last one was followed; cycle done");
-    }
-    else {
-        $state->{settled} = 1;
-        save_state();
-        emit("no links available yet; the next run will check again");
-    }
+    $state->{settled} = 1;
+    save_state();
+    emit("no links available yet; the next run will check again");
     exit 0;
 }
 
-$state->{settled} = 0;   # crash before finishing must not hide the leftovers
 save_state();
 
 my $followed = burst();
@@ -123,6 +108,8 @@ my $followed = burst();
 $state->{settled} = 1;
 save_state();
 emit("burst consumed $followed link(s); last link followed at $state->{last_used}");
+emit("all known links used within 23h45m; pausing checks until one nears refresh")
+    if known_links_consumed_recently();
 exit 0;
 
 sub open_state {
@@ -138,6 +125,7 @@ sub open_state {
         sysread($lock, $data, -s $lock);
     }
     $state = eval { decode_json($data) } // {};
+    $state->{links} = {} unless ref($state->{links}) eq 'HASH';
 }
 
 sub save_state {
@@ -147,17 +135,17 @@ sub save_state {
     syswrite($lock, $json . "\n", length($json) + 1);
 }
 
-# Reroll the daily start time on a new local date.  Zones, the last used
-# timestamp and settled state carry over; per-cycle counters reset.
+# Reroll the daily start time on a new local date.  Zones, per-link last-use
+# history and the last used timestamp carry over; per-cycle counters reset.
 sub roll_state {
     my $prior = $state;
     $state = {
         date      => today(),
         start_min => $daily ? int(rand($start_span)) : 0,
         zones     => $prior->{zones}     // {},
+        links     => $prior->{links}     // {},
         last_used => $prior->{last_used},
         settled   => $prior->{settled},
-        confirmed_at => $prior->{confirmed_at},
         votes     => 0,
     };
     save_state();
@@ -176,12 +164,15 @@ sub today {
     strftime("%Y-%m-%d", localtime());
 }
 
-sub used_epoch {
-    text_epoch($state->{last_used});
-}
-
-sub confirmed_epoch {
-    text_epoch($state->{confirmed_at});
+sub known_links_consumed_recently {
+    my $links = $state->{links} // {};
+    return 0 if keys %$links < 2;
+    my $now = time();
+    for my $name (keys %$links) {
+        my $used = text_epoch($links->{$name});
+        return 0 unless defined($used) && $now - $used < $skip_within;
+    }
+    return 1;
 }
 
 sub text_epoch {
@@ -189,6 +180,25 @@ sub text_epoch {
     my ($y, $mo, $d, $h, $mi, $s) = $text =~ /^(\d+)-(\d+)-(\d+) (\d+):(\d+):(\d+)$/
         or return undef;
     eval { timelocal($s, $mi, $h, $d, $mo - 1, $y) };
+}
+
+# Record every link name the pool offers as used now, then drop names that
+# have neither been offered nor used for more than 48 hours.  A name is the
+# unit of use: following it in any zone consumes it for every zone.
+sub track_links {
+    my @names = @_;
+    my $now = strftime("%Y-%m-%d %H:%M:%S", localtime());
+    for my $name (@names) {
+        $state->{links}{$name} = $now;
+    }
+    my %available = map { $_ => 1 } @names;
+    my $now_epoch = time();
+    for my $name (keys %{$state->{links}}) {
+        next if $available{$name};
+        my $used = text_epoch($state->{links}{$name});
+        next unless defined($used);
+        delete $state->{links}{$name} if $now_epoch - $used > 48 * 60 * 60;
+    }
 }
 
 sub discover {
@@ -272,6 +282,7 @@ sub burst {
                 next;
             }
             my @links = @{ $result->{options} // [] };
+            track_links(map { $_->{name} } @links);
             next unless @links;
             my $pick = $links[int rand @links];
             emit("zone $zone: voting via $pick->{name} at $pick->{url}");
@@ -279,7 +290,9 @@ sub burst {
             my $label = eval { $response->status_line };
             $label = "no response" unless defined $label;
             emit("zone $zone: visit returned $label");
-            $state->{last_used} = strftime("%Y-%m-%d %H:%M:%S", localtime());
+            my $used = strftime("%Y-%m-%d %H:%M:%S", localtime());
+            $state->{last_used} = $used;
+            $state->{links}{$pick->{name}} = $used;
             $state->{votes}++;
             save_state();
             $acted++;
