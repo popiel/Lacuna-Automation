@@ -1,0 +1,1 @@
+sqlite3 -readonly stars.db -header -column "SELECT s.x, s.y, s.zone, s.name, floor(sqrt((s.x - 750) * (s.x-750) + (s.y + 499) * (s.y + 499))) as dist from stars s where (select count(*) from orbitals o where o.star_id = s.id) = 0 and s.zone in ('2|-2', '3|-1') order by dist asc"
