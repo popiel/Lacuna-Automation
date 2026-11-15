@@ -100,3 +100,13 @@ Two pitfalls:
    RPC count resets at midnight GMT; running right after the reset burns the
    day's calls before the user can play.  This check is performed per-row in
    the main scan loop, not just once at startup.
+
+5. **Client.pm RPC-exceeded cache short-circuit**: `Client::call` checks the
+   cache (`type => 'misc', id => 'rpc_limit'`) before every RPC call.  If the
+   cached entry has `rpc_exceeded => 1` and its `_time` falls within the
+   current wall-time hour (`int(_time/3600) == int(time()/3600)`), the call is
+   not made and a `LacunaRPCException` (code 1010) is thrown instead.  When
+   the hour rolls over, the cache is stale and the next call proceeds normally
+   (and will re-cache if it hits the limit again).  The cache entry is written
+   by `Client::call` when the server returns error 1010 ("maximum number of
+   requests"); nothing else reads or clears it.

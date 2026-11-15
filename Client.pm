@@ -160,6 +160,21 @@ sub call {
   my $method = shift;
   my @params = @_;
 
+  # Short-circuit: if we already hit the max-requests limit during the current
+  # wall-time hour, return the cached exception instead of making an RPC call
+  # that we know will fail.
+  my $rpc_limit_cache = $self->cache_read(type => 'misc', id => 'rpc_limit');
+  if ($rpc_limit_cache && $rpc_limit_cache->{rpc_exceeded}) {
+    my $now_hour = int(time() / 3600);
+    my $cache_hour = int(($rpc_limit_cache->{_time} // 0) / 3600);
+    if ($cache_hour == $now_hour) {
+      warn "Out of requests (cached). Skipping RPC call $api/$method.\n";
+      LacunaRPCException->throw(code => 1010,
+                                text => "You have already made the maximum number of requests (10000) you can make for one day. (cached)",
+                                data => JSON::PP->new->allow_nonref->canonical->pretty->encode({message => "maximum number of requests"}));
+    }
+  }
+
   unshift(@params, $self->session_id) unless "$api/$method" eq "empire/login";
 
   $api = "/$api" unless $api =~ /^\//;
