@@ -95,6 +95,14 @@ sub rpc_remaining {
   return max(0, $limit - $count);
 }
 
+# True if the current GMT time is within the last 10 minutes of the day
+# (23:50 through 23:59).  The RPC count resets at midnight GMT, so we only
+# want to burn down remaining calls in that window.
+sub in_last_10_minutes_gmt {
+  my ($sec, $min, $hour) = gmtime;
+  return $hour == 23 && $min >= 50;
+}
+
 sub open_star_db {
   my $file = shift;
   -f $file or die "Database does not exist ($file), run star_db_util.pl --create-db\n";
@@ -131,6 +139,7 @@ sub upsert_star {
 # --- main ------------------------------------------------------------------
 
 my $client = Client->new(config => $config_name);
+
 my $dbh = open_star_db($db_file);
 check_schema($dbh);
 
@@ -173,6 +182,14 @@ for my $y (@rows) {
 
   emit("Fetching row y=$y")
     if $debug || !$quiet;
+
+  # Abort if we are not within the last 10 minutes of the GMT day
+  # (23:50-23:59).  The RPC count resets at midnight GMT.
+  unless (in_last_10_minutes_gmt()) {
+    my ($sec, $min, $hour) = gmtime;
+    emit("Aborting row y=$y: current GMT time is $hour:$min, not within 23:50-23:59");
+    last ROW;
+  }
 
   my $result;
   unless ($noaction) {
