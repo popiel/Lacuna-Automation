@@ -998,10 +998,21 @@ sub get_probed_stars {
   }
   $result->{stars} = \@stars;
   # The list only changes when one of this observatory's own probes arrives
-  # (handled by cache_revalidate with the probe's arrival time) or a probe is
-  # abandoned (handled by abandon_probe), so it can be trusted a lot longer
-  # than the 30-minute run cadence of probe_hunter.
-  my $invalid = time() + 2400;
+  # (handled by cache_revalidate with the probe's arrival time) or a probe
+  # is abandoned (handled by abandon_probe), so the base TTL is long: 22.5
+  # hours rather than 24, to keep clear of daily jobs even across DST
+  # shifts.
+  my $invalid = time() + 81000;
+  # An observatory upgrade only raises max_probes when it completes, so
+  # expire the cached response right then.
+  eval {
+    my $body_id = $result->{status}{body}{id} or return;
+    my $buildings = $self->body_buildings($body_id);
+    my ($obs) = grep { $_->{id} == $building_id } values(%{$buildings->{buildings}});
+    return unless $obs && $obs->{pending_build};
+    my $end = parse_time($obs->{pending_build}{end});
+    $invalid = $end if $end && $end > time();
+  };
   $self->cache_write( type => 'observatory_get_probed_stars', id => $building_id, data => $result, invalid => $invalid );
   return $result;
 }

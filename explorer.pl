@@ -108,7 +108,9 @@ for my $body_id (@body_ids) {
   for my $star (@{$stars->{stars}}) {
     db_update_star($star, $stars->{status}{_time});
     if (!check_keeper($star)) {
-      $noaction or $client->call(observatory => abandon_probe => $obs{$body_id}{id}, $star->{id});
+      # Client::abandon_probe invalidates the probed-stars cache; a raw
+      # observatory call would leave the cached list stale.
+      $noaction or $client->abandon_probe($obs{$body_id}{id}, $star->{id});
       emit("Abandoning probe at $star->{name} ($star->{x},$star->{y})", $body_id);
       $stars->{star_count}--;
     }
@@ -134,11 +136,17 @@ for my $body_id (@body_ids) {
     eval {
       my $result;
       $noaction or ($result = $client->send_ship($probe->{id}, { star_id => $target->{id} }));
-      my $arrives = Client::format_time(Client::parse_time($result->{ship}{date_arrives}));
+      my $arrives = Client::parse_time($result->{ship}{date_arrives});
+      # The probed-star list only grows when a probe lands, so expire the
+      # cached list right when this probe is due to arrive.
+      if ($arrives) {
+        $client->cache_revalidate(type => 'observatory_get_probed_stars',
+                                  id  => $obs{$body_id}{id}, invalid => $arrives + 60);
+      }
       my $body = $client->body_status($body_id);
       emit("Sent probe ".int(sqrt(dist2($body, $target)))." units".
            " to $target->{name} at ($target->{x},$target->{y}),".
-           " arriving at $arrives", $body_id);
+           " arriving at ".Client::format_time($arrives), $body_id);
       1;
     } or emit("Couldn't send probe to $target->{name} at ($target->{x},$target->{y}): $@", $body_id);
   }

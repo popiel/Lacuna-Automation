@@ -317,8 +317,22 @@ sub run {
       last unless $target;
       $claimed{$target->{id}} = 1;
       unless ($noaction) {
-        eval { $client->send_ship($probe->{id}, { star_id => $target->{id} }); 1; }
-          or do { delete $claimed{$target->{id}}; $failed_total++; emit("Couldn't send probe to $target->{name}: $@"); next; };
+        my $result = eval { $client->send_ship($probe->{id}, { star_id => $target->{id} }); };
+        if (!$result) {
+          delete $claimed{$target->{id}};
+          $failed_total++;
+          emit("Couldn't send probe to $target->{name}: $@");
+          next;
+        }
+        # The probed-star list only grows when a probe lands, so expire the
+        # cached list right when this probe is due to arrive.  Needed even
+        # though the travelling-ship sweep covers later runs: a probe that
+        # lands between two runs is no longer travelling by then.
+        my $arrives = Client::parse_time($result->{ship}{date_arrives});
+        if ($arrives) {
+          $client->cache_revalidate(type => 'observatory_get_probed_stars',
+                                    id  => $obs{$body_id}{id}, invalid => $arrives + 60);
+        }
       }
       $room--;
       $sent{$body_id}++;
