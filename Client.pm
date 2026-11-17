@@ -338,7 +338,6 @@ sub body_status {
   my $result = $self->cache_read( type => 'body_status', id => $body_id, stale => 500 );
   return $result if $result;
 
-  $self->cache_invalidate( type => 'buildings', id => $body_id );
   $result = $self->body_buildings($body_id)->{status}{body};
   return $result || croak "Couldn't get body status";
 }
@@ -358,7 +357,31 @@ sub body_buildings {
   }
   my $invalid = List::Util::min(time() + 3600, @completions);
   $self->cache_write( type => 'buildings', id => $body_id, data => $result, invalid => $invalid );
+  $self->_note_university_level($body_id, $result);
   return $result;
+}
+
+# A university upgrade only raises its level when it completes, and that
+# re-opens the upgradeability of every building that was capped at
+# 'university level + 1'.  The building_view caches hold those denials for
+# up to an hour, so detect the level change here - body_buildings refetches
+# right when the university's pending build completes - and sweep them.
+sub _note_university_level {
+  my ($self, $body_id, $result) = @_;
+
+  my ($uni) = grep { ($_->{name} // '') eq 'University' } values %{$result->{buildings}};
+  return unless $uni;
+
+  my $key   = "university_level_$body_id";
+  my $known = $self->cache_read( type => 'misc', id => $key );
+  return if $known && $known->{level} == $uni->{level};
+
+  $self->cache_write( type => 'misc', id => $key, data => { level => $uni->{level} } );
+  return unless $known;
+  for my $id ( keys %{$result->{buildings}} ) {
+    $self->cache_invalidate( type => 'building_view', id => $id );
+  }
+  return;
 }
 
 sub body_buildable {
@@ -559,6 +582,10 @@ sub building_view {
     push(@completions, parse_time($building->{work         }{end})) if $building->{work};
   }
   push(@completions, time() + 300) unless $result->{building}{upgrade}{can};
+  if (!$result->{building}{upgrade}{can}) {
+    my $code = $result->{building}{upgrade}{reason}[0];
+    push(@completions, time() + 3600) if $code == 1009 || $code == 1013;
+  }
   my $invalid = List::Util::min(time() + 3600, @completions);
 
   $self->cache_write( type => 'building_view', id => $building_id, invalid => $invalid, data => $result );
@@ -875,8 +902,22 @@ sub get_probed_stars {
     $page++;
   }
   $result->{stars} = \@stars;
-  my $invalid = time() + 600;
+  # The list only changes when one of this observatory's own probes arrives
+  # (handled by cache_revalidate with the probe's arrival time) or a probe is
+  # abandoned (handled by abandon_probe), so it can be trusted a lot longer
+  # than the 30-minute run cadence of probe_hunter.
+  my $invalid = time() + 2400;
   $self->cache_write( type => 'observatory_get_probed_stars', id => $building_id, data => $result, invalid => $invalid );
+  return $result;
+}
+
+sub abandon_probe {
+  my $self = shift;
+  my $building_id = shift;
+  my $star_id = shift;
+
+  my $result = $self->call(observatory => abandon_probe => $building_id, $star_id);
+  $self->cache_invalidate( type => 'observatory_get_probed_stars', id => $building_id );
   return $result;
 }
 
@@ -895,6 +936,9 @@ sub send_ship {
   my $target = shift;
 
   my $result = $self->call(spaceport => send_ship => $ship, $target);
+  if ($result) {
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
+  }
   return $result;
 }
 
@@ -1345,6 +1389,17 @@ sub cache_write {
 sub cache_invalidate {
     my ($self, %args) = @_;
     unlink $self->_cache_path( $args{type}, $args{id} );
+    return;
+}
+
+sub cache_revalidate {
+    my ($self, %args) = @_;
+
+    my $path = $self->_cache_path( $args{type}, $args{id} );
+    my $data = $self->read_json( $path ) or return;
+    return unless $args{invalid};
+    $data->{_invalid} = $args{invalid} if !$data->{_invalid} || $args{invalid} < $data->{_invalid};
+    $self->write_json( $path, $args{type}, $data );
     return;
 }
 

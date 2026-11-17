@@ -168,7 +168,6 @@ sub run {
   # --- validate bases --------------------------------------------------
   my (%obs, %ports, %yards);
   for my $body_id (@body_ids) {
-    $client->cache_invalidate(type => 'buildings', id => $body_id);
     $obs{$body_id}  = eval { $client->find_building($body_id, "Observatory") };
     $ports{$body_id} = [ eval { $client->find_building($body_id, "Space Port") } ];
     $yards{$body_id} = [ eval { $client->find_building($body_id, "Shipyard") } ];
@@ -181,11 +180,6 @@ sub run {
   # --- fetch per-body data ---------------------------------------------
   my (%ships, %probed_stars, %body_coords, %yard_queues, %yard_buildable);
   for my $body_id (@body_ids) {
-    $client->cache_invalidate(type => 'observatory_get_probed_stars', id => $obs{$body_id}{id});
-    $client->cache_invalidate(type => 'spaceport_view_all_ships',     id => $body_id);
-    $client->cache_invalidate(type => 'shipyard_view_build_queue',    id => $_->{id}) for @{$yards{$body_id}};
-    $client->cache_invalidate(type => 'shipyard_buildable',           id => $_->{id}) for @{$yards{$body_id}};
-
     my $ok = eval {
       $ships{$body_id}      = $client->port_all_ships($body_id);
       $probed_stars{$body_id} = $client->get_probed_stars($obs{$body_id}{id});
@@ -207,6 +201,17 @@ sub run {
   }
   @body_ids = grep { exists $obs{$_} } @body_ids;
   die "No usable bases remain\n" unless @body_ids;
+
+  # A probe's arrival changes its observatory's probed-star list, so make
+  # sure the cached list expires when the first in-flight probe lands.
+  for my $body_id (@body_ids) {
+    my @arrivals = map { Client::parse_time($_->{date_arrives}) }
+                   grep { $_->{type} eq 'probe' && $_->{task} eq 'Travelling' && $_->{date_arrives} }
+                   @{$ships{$body_id}{ships}};
+    next unless @arrivals;
+    my $invalid = List::Util::min(@arrivals) + 60;
+    $client->cache_revalidate(type => 'observatory_get_probed_stars', id => $obs{$body_id}{id}, invalid => $invalid);
+  }
 
   # --- global sets ------------------------------------------------------
   for my $body_id (@body_ids) {
@@ -251,6 +256,7 @@ sub run {
   my $abandoned = 0;
   my $sent_total = 0;
   my $built_total = 0;
+  my $failed_total = 0;
 
   # --- section 7: abandon probes -----------------------------------------
   for my $body_id (@body_ids) {
@@ -266,8 +272,8 @@ sub run {
         {}, $star->{id}, 'p11', 'p12', 'p33', 'p35');
       next unless should_abandon($orb_count, $cs, $des);
       unless ($noaction) {
-        eval { $client->call(observatory => abandon_probe => $obs_id, $star->{id}); 1; }
-          or do { emit("Couldn't abandon probe at $star->{name}: $@"); next; };
+        eval { $client->abandon_probe($obs_id, $star->{id}); 1; }
+          or do { $failed_total++; emit("Couldn't abandon probe at $star->{name}: $@"); next; };
       }
       emit("Abandoning probe at $star->{name} ($star->{x},$star->{y})", $body_names{$body_id});
       $stars->{star_count}--;
@@ -289,7 +295,7 @@ sub run {
       $claimed{$target->{id}} = 1;
       unless ($noaction) {
         eval { $client->send_ship($probe->{id}, { star_id => $target->{id} }); 1; }
-          or do { delete $claimed{$target->{id}}; emit("Couldn't send probe to $target->{name}: $@"); next; };
+          or do { delete $claimed{$target->{id}}; $failed_total++; emit("Couldn't send probe to $target->{name}: $@"); next; };
       }
       $room--;
       $sent{$body_id}++;
@@ -331,11 +337,13 @@ sub run {
         1;
       };
       unless ($ok) {
+        $failed_total++;
         $ok = eval {
           $noaction or $client->yard_build($yard->{id}, 'probe', 1);
           1;
         };
         $count = 1 if $ok;
+        $failed_total++ unless $ok;
       }
       if ($ok) {
         emit("Building $count probe(s) in yard at ($yard->{x},$yard->{y})", $body_names{$body_id});
@@ -347,7 +355,7 @@ sub run {
     }
   }
 
-  emit("Summary: abandoned=$abandoned sent=$sent_total built=$built_total bodies=" . scalar(@body_ids));
+  emit("Summary: abandoned=$abandoned sent=$sent_total built=$built_total failed=$failed_total bodies=" . scalar(@body_ids));
 }
 
 run() unless caller;

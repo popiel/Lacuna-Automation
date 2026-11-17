@@ -126,8 +126,11 @@ failure, keep the probe.
 
 ### 10. Summary
 
-Report totals for probes abandoned, sent, and built, plus any bodies skipped
-and why.
+Report totals for probes abandoned, sent, and built, the number of failed RPC
+calls (`failed=`), plus any bodies skipped and why. A failed RPC never counts
+toward the sent or built totals, and a failed probe send leaves the target star
+unclaimed (not marked en-route), so it may be retried by a later probe in the
+same run.
 
 ## Cache notes
 
@@ -136,8 +139,11 @@ and why.
   `shipyard_buildable`.
 - `yard_build` invalidates the yard queue, body buildings, and space-port ship
   list itself.
-- `send_ship` and `abandon_probe` do not invalidate their caches; the next run
-  invalidates them.
+- `send_ship` invalidates the body's space-port ship list; `abandon_probe`
+  invalidates the observatory's probed-star list.
+- `cache_revalidate` tightens the probed-star cache expiry to the earliest
+  in-flight probe's arrival, so the cached list stays accurate without
+  refetching every run.
 
 ## Edge cases
 
