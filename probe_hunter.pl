@@ -349,7 +349,7 @@ sub run {
     my $building = 0;
     for my $yard (@{$yards{$body_id}}) {
       my $q = $yard_queues{$yard->{id}};
-      $building += sum(map { $_->{quantity} // 1 } grep { $_->{type} eq 'probe' } @{$q->{ships_building}}) if $q;
+      $building += (sum(map { $_->{quantity} // 1 } grep { $_->{type} eq 'probe' } @{$q->{ships_building}}) // 0) if $q;
     }
     my $slots   = 2 * sum(map { $_->{level} } @{$ports{$body_id}});
     my $used    = scalar @{$ships{$body_id}{ships}};
