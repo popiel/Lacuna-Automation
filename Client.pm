@@ -253,9 +253,19 @@ sub call {
   }
   my $body = $result->{result}{status}{body};
   if ($body) {
-    my @arrivals = map { parse_time($_->{date_arrives}) } @{ $body->{incoming_foreign_ships} || [] };
+    # Both foreign and own arrivals change the body (enemy presence, or
+    # trade ships delivering stores), so the snapshot expires when the
+    # next ship of either kind lands.
+    my @arrivals = map { parse_time($_->{date_arrives}) }
+                       @{ $body->{incoming_foreign_ships} || [] },
+                       @{ $body->{incoming_own_ships}     || [] };
+    @arrivals = grep { $_ && $_ > time() } @arrivals;
     my $invalid = List::Util::min(time() + 3600, @arrivals);
-    $self->cache_write( type => 'body_status', id => $body->{id}, data => $body, invalid => $invalid );
+    # Stamp the cached copy with _time so cache_read's staleness check and
+    # estimated_body_status can tell how old the snapshot is; the original
+    # status wrapper keeps its own _time.
+    my $body_cache = { %$body, _time => $time };
+    $self->cache_write( type => 'body_status', id => $body->{id}, data => $body_cache, invalid => $invalid );
   }
   return $result->{result};
 }
@@ -380,6 +390,72 @@ sub _note_university_level {
   return unless $known;
   for my $id ( keys %{$result->{buildings}} ) {
     $self->cache_invalidate( type => 'building_view', id => $id );
+  }
+  return;
+}
+
+# Estimate a body's current resource stores by advancing the newest cached
+# status snapshot with its own production rates.  Read-only: never makes an
+# RPC call, and reads cache files directly, so even expired entries still
+# yield a usable snapshot.  Returns a status hash like body_status with the
+# *_stored fields replaced by estimates, or undef when nothing has ever
+# been cached for this body.  The returned hash has no _time stamp - treat
+# it as a snapshot of right now.
+sub estimated_body_status {
+  my $self = shift;
+  my $body_id = shift;
+
+  my ($snap, $snap_time);
+  for my $type (qw(body_status buildings)) {
+    my $entry = $self->read_json( $self->_cache_path( $type, $body_id ) ) or next;
+    my $status = $type eq 'buildings' ? $entry->{status}{body} : $entry;
+    next unless $status && $entry->{_time};
+    if (!$snap || $entry->{_time} > $snap_time) {
+      $snap      = $status;
+      $snap_time = $entry->{_time};
+    }
+  }
+  return unless $snap;
+
+  my $status = { %$snap };
+  delete $status->{_time};
+  my $elapsed = time() - $snap_time;
+  $elapsed = 0 if $elapsed < 0;
+  for my $res (qw(food ore water energy waste)) {
+    next unless defined $snap->{"${res}_stored"};
+    my $est = $snap->{"${res}_stored"} + ($snap->{"${res}_hour"} // 0) * $elapsed / 3600;
+    $est = 0 if $est < 0;
+    $est = $snap->{"${res}_capacity"} if defined $snap->{"${res}_capacity"} && $est > $snap->{"${res}_capacity"};
+    $status->{"${res}_stored"} = int($est);
+  }
+  return $status;
+}
+
+# Fold a delta of stored resources into whatever status snapshots are cached
+# for a body, in place, without any RPC.  Only entries that exist are
+# touched, and only the listed types - callers must not adjust a snapshot
+# that the server has already re-reported post-mutation.
+sub _adjust_body_stores {
+  my $self = shift;
+  my $body_id = shift;
+  my $deltas = shift;
+  my @types = @_;
+
+  return unless $body_id && $deltas;
+  @types = qw(buildings) unless @types;
+  for my $type (@types) {
+    my $path = $self->_cache_path( $type, $body_id );
+    my $entry = $self->read_json( $path ) or next;
+    my $status = $type eq 'buildings' ? $entry->{status}{body} : $entry;
+    next unless $status;
+    my $changed;
+    for my $res ( keys %$deltas ) {
+      next unless defined $status->{"${res}_stored"};
+      $status->{"${res}_stored"} += $deltas->{$res};
+      $status->{"${res}_stored"} = 0 if $status->{"${res}_stored"} < 0;
+      $changed = 1;
+    }
+    $self->write_json( $path, $type, $entry ) if $changed;
   }
   return;
 }
@@ -1037,7 +1113,10 @@ sub yard_buildable {
     push(@completions, parse_time($building->{pending_build}{end}));
   }
 
-  my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 600, @completions));
+  # With no completions pending, a 30-minute TTL means at most one
+  # get_buildable per hour per yard; resource-driven `can` changes are
+  # estimated locally by callers.
+  my $invalid = List::Util::max(time() + 30, List::Util::min(time() + 1800, @completions));
   $self->cache_write( type => 'shipyard_buildable', id => $yard_id, data => $result, invalid => $invalid );
   return $result;
 }
@@ -1049,10 +1128,35 @@ sub yard_build {
   my $count = shift || 1;
 
   my $result = $self->call(shipyard => build_ship => $building_id, $type, $count);
-  $self->cache_invalidate( type => 'buildable', id => $building_id );
-  $self->cache_invalidate( type => 'shipyard_view_build_queue', id => $building_id );
   if ($result) {
-    $self->cache_invalidate( type => 'buildings',                id => $result->{status}{body}{id} );
+    # Building ships spends stored resources.  call() has already re-cached
+    # the body_status from this response, so only the get_buildings
+    # snapshot needs adjusting; adjusting both would subtract twice.
+    if (my $buildable = $self->cache_read( type => 'shipyard_buildable', id => $building_id )) {
+      my $cost = $buildable->{buildable}{$type}{cost} || {};
+      my %deltas;
+      for my $res (qw(food ore water energy)) {
+        $deltas{$res} = -($cost->{$res} // 0) * $count if $cost->{$res};
+      }
+      $self->_adjust_body_stores( $result->{status}{body}{id}, \%deltas ) if %deltas;
+    }
+    $self->cache_invalidate( type => 'shipyard_buildable', id => $building_id );
+    # The build response is the post-build build queue, so it can be cached
+    # as one directly - no view_build_queue refetch needed.  Only trust it
+    # when it is complete: the count of ships building must match the
+    # entries (a paged or truncated response falls back to invalidation).
+    my @ships = @{$result->{ships_building} // []};
+    if (($result->{number_of_ships_building} // 0) == scalar(@ships)) {
+      my @completions;
+      for my $ship (@ships) {
+        push(@completions, parse_time($ship->{date_completed})) if $ship->{date_completed};
+      }
+      my $invalid = List::Util::min(time() + 3600, @completions);
+      $self->cache_write( type => 'shipyard_view_build_queue', id => $building_id, data => $result, invalid => $invalid );
+    }
+    else {
+      $self->cache_invalidate( type => 'shipyard_view_build_queue', id => $building_id );
+    }
     $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
   }
   return $result;
@@ -1067,17 +1171,32 @@ sub trade_push {
 
   my $result = $self->call(trade => push_items => $building_id, $target_id, $items, $options);
   if ($result) {
-    $self->cache_invalidate( type => 'body_status', id => $target_id );
-    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $target_id );
-    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
+    my $sender_id = $result->{status}{body}{id};
+    # The server deducts cargo from the sending body immediately; call()
+    # has already re-cached its body_status from this response, so only the
+    # get_buildings snapshot needs dropping here.
+    $self->cache_invalidate( type => 'buildings', id => $sender_id );
+    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $sender_id );
     if (grep { $_->{type} eq "plan" } @$items) {
-      $self->cache_invalidate( type => 'plans', id => $target_id );
-      $self->cache_invalidate( type => 'plans', id => $result->{status}{body}{id} );
-      $self->cache_invalidate( type => 'buildable', id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'plans', id => $sender_id );
+      $self->cache_invalidate( type => 'buildable', id => $sender_id );
     }
     if (grep { $_->{type} eq "glyph" } @$items) {
-      $self->cache_invalidate( type => 'glyphs', id => $target_id );
-      $self->cache_invalidate( type => 'glyphs', id => $result->{status}{body}{id} );
+      $self->cache_invalidate( type => 'glyphs', id => $sender_id );
+    }
+    # The target gains the cargo only when the fleet arrives (CargoExchange
+    # unloads on arrival), so its caches are tightened to the arrival time
+    # rather than dropped now.  With no parseable arrival time, fall back
+    # to dropping them.
+    my $fleet = $result->{fleet} || {};
+    my $arrival = parse_time($fleet->{date_arrives})
+               || parse_time($fleet->{details}{date_available});
+    my @target_types = qw(body_status buildings spaceport_view_all_ships plans glyphs);
+    if ($arrival && $arrival > time()) {
+      $self->cache_revalidate( type => $_, id => $target_id, invalid => $arrival ) for @target_types;
+    }
+    else {
+      $self->cache_invalidate( type => $_, id => $target_id ) for @target_types;
     }
   }
   return $result;
@@ -1091,7 +1210,12 @@ sub transporter_push {
 
   my $result = $self->call(transporter => push_items => $building_id, $target_id, $items);
   if ($result) {
+    # The subspace transporter transfers instantly - both bodies change
+    # now.  call() has already re-cached the sender's body_status, so only
+    # its get_buildings snapshot needs dropping.
+    $self->cache_invalidate( type => 'buildings', id => $result->{status}{body}{id} );
     $self->cache_invalidate( type => 'body_status', id => $target_id );
+    $self->cache_invalidate( type => 'buildings', id => $target_id );
     if (grep { $_->{type} eq "ship" } @$items) {
       $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $target_id );
       $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );

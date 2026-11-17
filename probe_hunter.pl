@@ -98,6 +98,30 @@ sub compute_build_count {
   return 0;
 }
 
+# How many ships of a given cost can the body's stores cover right now?
+# $cost is a get_buildable cost hash (per-ship food/ore/water/energy), and
+# $status is a body status snapshot.  If the snapshot carries a _time, the
+# stored amounts are first advanced by their own production rates (clamped
+# to [0, capacity]), so a stale snapshot still yields a usable estimate.
+sub affordable_count {
+  my ($cost, $status) = @_;
+
+  my $elapsed = defined $status->{_time} ? max(0, time() - $status->{_time}) : 0;
+  my $count;
+  for my $res (qw(food ore water energy)) {
+    my $unit = $cost->{$res} or next;
+    my $stored = $status->{"${res}_stored"} // 0;
+    if ($elapsed && defined $status->{"${res}_hour"}) {
+      $stored += $status->{"${res}_hour"} * $elapsed / 3600;
+      $stored = 0 if $stored < 0;
+      $stored = $status->{"${res}_capacity"} if defined $status->{"${res}_capacity"} && $stored > $status->{"${res}_capacity"};
+    }
+    my $affordable = $unit > 0 ? int($stored / $unit) : 0;
+    $count = defined $count ? min($count, $affordable) : $affordable;
+  }
+  return $count // 0;
+}
+
 sub should_abandon {
   my ($orb_count, $colony_or_station, $desirable) = @_;
   return 0 unless $orb_count;                       # C1: not explored
@@ -178,7 +202,7 @@ sub run {
   %body_names = map { $_ => $body_names{$_} } @body_ids;
 
   # --- fetch per-body data ---------------------------------------------
-  my (%ships, %probed_stars, %body_coords, %yard_queues, %yard_buildable);
+  my (%ships, %probed_stars, %body_coords, %yard_queues);
   for my $body_id (@body_ids) {
     my $ok = eval {
       $ships{$body_id}      = $client->port_all_ships($body_id);
@@ -186,7 +210,6 @@ sub run {
       $body_coords{$body_id}  = $client->body_status($body_id);
       for my $yard (@{$yards{$body_id}}) {
         $yard_queues{$yard->{id}}  = $client->yard_queue($yard->{id});
-        $yard_buildable{$yard->{id}} = $client->yard_buildable($yard->{id});
       }
       1;
     };
@@ -312,22 +335,44 @@ sub run {
     my $building = 0;
     for my $yard (@{$yards{$body_id}}) {
       my $q = $yard_queues{$yard->{id}};
-      $building += scalar(grep { $_->{type} eq 'probe' } @{$q->{ships_building}}) if $q;
+      $building += sum(map { $_->{quantity} // 1 } grep { $_->{type} eq 'probe' } @{$q->{ships_building}}) if $q;
     }
     my $slots   = 2 * sum(map { $_->{level} } @{$ports{$body_id}});
     my $used    = scalar @{$ships{$body_id}{ships}};
     my $build_count = compute_build_count($docked, $building, $slots, $used);
     next unless $build_count > 0;
 
-    my @buildable = grep {
-      my $yb = $yard_buildable{$_->{id}};
-      $yb && $yb->{buildable}{probe}{can};
-    } @{$yards{$body_id}};
+    my $body = $body_coords{$body_id};
+    my %buildable;
+    for my $yard (@{$yards{$body_id}}) {
+      my $yb = $client->yard_buildable($yard->{id});
+      $buildable{$yard->{id}} = ($yb && $yb->{buildable}{probe}) ? $yb->{buildable}{probe} : undef;
+    }
+    my @buildable = grep { $buildable{$_->{id}} && $buildable{$_->{id}}{can} } @{$yards{$body_id}};
     @buildable = sort {
       my $aq = $yard_queues{$a->{id}}{ships_building} // [];
       my $bq = $yard_queues{$b->{id}}{ships_building} // [];
       scalar(@$aq) <=> scalar(@$bq);
     } @buildable;
+    next unless @buildable;
+
+    # Cap the build count to what the body can afford right now, based on
+    # the cost table from get_buildable and the newest cached status
+    # snapshot advanced by its production rates.  Building more than the
+    # stores cover just buys a server-side refusal.
+    my $cost = $buildable{$buildable[0]{id}}{cost};
+    if ($cost) {
+      my $status = $client->estimated_body_status($body_id) // $body;
+      my $affordable = affordable_count($cost, $status);
+      if ($affordable < $build_count) {
+        if ($affordable == 0) {
+          emit("Can't afford a probe yet (needs ".join(", ", map { "$_ $cost->{$_}" } grep { $cost->{$_} } qw(food ore water energy)).")", $body_names{$body_id}) unless $quiet;
+          next;
+        }
+        emit("Affordable probe builds capped at $affordable", $body_names{$body_id}) unless $quiet;
+        $build_count = $affordable;
+      }
+    }
 
     for my $yard (@buildable) {
       last unless $build_count > 0;

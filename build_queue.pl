@@ -467,7 +467,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
     $focus = ($focus =~ /store/) ? "stored" : "hour";
 
     my @buildings = values(%{$buildings->{buildings}});
-    my $status = $client->body_status($body_id);
+    my $status = $client->estimated_body_status($body_id) // $client->body_status($body_id);
     my %ratio;
     for my $type (qw(food ore water energy)) {
       $ratio{$type} = $status->{"${type}_stored"} / $status->{"${type}_capacity"};
@@ -642,7 +642,7 @@ sub upgrade_check {
   $building = populate_building_with_production($building);
   my @buildings = values(%{$buildings->{buildings}});
   my $depot = List::Util::first { $_->{url} =~ /subspacesupplydepot/ } @buildings;
-  my $status = $client->body_status($body_id);
+  my $status = $client->estimated_body_status($body_id) // $client->body_status($body_id);
   my @message;
   for (qw(food ore water energy)) {
     push(@message, "$_ (".$status->{"${_}_capacity"}."/".$building->{upgrade}{cost}{$_}.")")

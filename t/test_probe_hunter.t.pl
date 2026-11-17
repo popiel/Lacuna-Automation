@@ -113,4 +113,54 @@ subtest 'find_target' => sub {
   is($t, undef, 'en_route star skipped when it is the only candidate');
 };
 
+# --- affordable_count ------------------------------------------------------
+subtest 'affordable_count' => sub {
+  plan tests => 8;
+  my $cost = { food => 1000, ore => 2000, water => 500, energy => 4000 };
+  my $now = time();
+
+  # all resources plentiful
+  my $status = { food_stored => 5000, ore_stored => 9000, water_stored => 2500, energy_stored => 16000 };
+  is(affordable_count($cost, $status), 4, 'plentiful stores -> min ratio');
+
+  # energy is the binding constraint
+  $status = { food_stored => 5000, ore_stored => 9000, water_stored => 2500, energy_stored => 9000 };
+  is(affordable_count($cost, $status), 2, 'binding constraint -> 2');
+
+  # a missing resource blocks everything
+  $status = { food_stored => 5000, ore_stored => 9000, energy_stored => 16000 };
+  is(affordable_count($cost, $status), 0, 'missing resource -> 0');
+
+  # no _time: elapsed 0, no rate drift applied
+  $status = { food_stored => 5000, ore_stored => 9000, water_stored => 2500, energy_stored => 9000 };
+  is(affordable_count($cost, $status), 2, 'no _time -> no drift');
+
+  # with a _time in the past, positive rates grow the estimate: energy is
+  # the binding resource and the drift is what lifts it from 2 to 3
+  $status = { _time => $now - 3600,
+              food_stored => 5000,  food_hour  => 100,  food_capacity  => 20000,
+              ore_stored  => 9000,  ore_hour   => 200,  ore_capacity   => 30000,
+              water_stored => 2500, water_hour => 50,   water_capacity => 10000,
+              energy_stored => 11900, energy_hour => 400, energy_capacity => 40000 };
+  is(affordable_count($cost, $status), 3, 'drift lifts the binding constraint');
+
+  # negative rates clamp at zero rather than going negative
+  $status = { _time => $now - 3600,
+              food_stored => 0, food_hour => -100, food_capacity => 20000,
+              ore_stored  => 9000, ore_hour => 0, ore_capacity => 30000,
+              water_stored => 2500, water_hour => 0, water_capacity => 10000,
+              energy_stored => 9000, energy_hour => 0, energy_capacity => 40000 };
+  is(affordable_count($cost, $status), 0, 'negative rate clamps at zero -> 0');
+
+  # growth clamps at capacity: raw drift would allow 201, cap holds 200
+  $status = { _time => $now - 7200,
+              food_stored => 99900, food_hour => 500, food_capacity => 100000 };
+  is(affordable_count({ food => 500 }, $status), 200, 'capacity clamp caps the estimate');
+
+  # future _time (clock skew) is treated as no elapsed time
+  $status = { _time => $now + 600,
+              food_stored => 5000, ore_stored => 9000, water_stored => 2500, energy_stored => 9000 };
+  is(affordable_count($cost, $status), 2, 'future _time -> no drift');
+};
+
 done_testing();
