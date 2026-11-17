@@ -537,6 +537,9 @@ for (my $j = $[; $j <= $#queue; $j++) {
     emit("Want to upgrade $type production") unless $quiet && $sleepy;
 
     @buildings = grep { $_->{name} !~ /Algae Pond|Malcud Field|Lapis Forest|Beeldeban Nest|Geo Thermal Vent|Volcano|Natural Spring/ } @buildings;
+    # Decorations can't be upgraded - the server refuses with 'It forms
+    # naturally.' - so keep them out of the production-upgrade ranking.
+    @buildings = grep { $_->{name} !~ /Lake|Crater|Rocky Outcrop|Beach/ } @buildings;
     @buildings = grep { $_->{"${type}_hour"} >= 0 } map { populate_building_with_production($_, @buildings) } @buildings;
     my %prod;
     if ($balance && $type eq "food") {
