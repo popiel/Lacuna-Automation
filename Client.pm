@@ -592,12 +592,31 @@ sub building_view {
   return $result;
 }
 
+sub building_view_cached {
+  my $self = shift;
+  my $building_id = shift;
+
+  my $result = $self->read_json( $self->_cache_path( 'building_view', $building_id ) ) or return;
+  return ($result->{_invalid} && $result->{_invalid} > time()) ? $result : undef;
+}
+
+sub cache_building_denial {
+  my ($self, $building_id, $code, $text) = @_;
+
+  return unless defined $code && grep { $code == $_ } 1009, 1011, 1012, 1013;
+  my $ttl = ($code == 1009 || $code == 1013) ? 3600 : 300;
+  $self->cache_write( type    => 'building_view',
+                      id      => $building_id,
+                      data    => { building => { upgrade => { can => 0, reason => [ $code, $text ] } } },
+                      invalid => time() + $ttl );
+  return;
+}
+
 sub building_stats_for_level {
   my $self = shift;
   my $url = shift;
   my $building_id = shift;
   my $level = shift;
-
   my $result = $self->cache_read( type => 'building_stats', id => $building_id, level => $level );
   return $result if $result;
 

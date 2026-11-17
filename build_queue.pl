@@ -229,7 +229,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
       if ($building->{name} eq $name && $building->{level} < 30 &&
           (!$level || ($upTo ? $building->{level} < $level : $building->{level} == $level))) {
         $building->{id} = $id;
-        my $message = upgrade_check($building, 1);
+        my ($upgrade, $message) = attempt_upgrade($building, 1);
         if ($message) {
           emit("Cannot upgrade $building->{level} $name: $message") unless $quiet && $sleepy;
           if ($queue[$j] !~ /^\-/) {
@@ -238,7 +238,6 @@ for (my $j = $[; $j <= $#queue; $j++) {
           }
           next;
         }
-        my $upgrade = $client->building_upgrade($building->{url}, $id);
         emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
         if ($retain) {
           emit("Retaining upgrade command for $upTo$level $realname");
@@ -305,7 +304,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
         next;
       }
 
-      my $message = upgrade_check($building, 1);
+      my ($upgrade, $message) = attempt_upgrade($building, 1);
       if ($message) {
         emit("Cannot upgrade $building->{level} $name: $message") unless $quiet && $sleepy;
         if ($queue[$j] !~ /^\-/) {
@@ -314,7 +313,6 @@ for (my $j = $[; $j <= $#queue; $j++) {
         }
         next;
       }
-      my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
       emit("Upgrading $building->{level} $name, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
       @queue = map { s/^\-//; $_; } @queue;
       write_queue();
@@ -484,7 +482,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
         if ($storage[0]{level} < $storage[$#storage]{level}) {
           emit("Equalizing storage levels") unless $quiet && $sleepy;
           my $building = $storage[0];
-          my $message = upgrade_check($building, 1);
+          my ($upgrade, $message) = attempt_upgrade($building, 1);
           if ($message) {
             emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
             if ($queue[$j] !~ /^\-/) {
@@ -493,15 +491,12 @@ for (my $j = $[; $j <= $#queue; $j++) {
             }
             next;
           }
-          else {
-            my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
-            emit("Equalizing storage levels") if $quiet && $sleepy;
-            emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
-            @queue = map { s/^\-//; $_; } @queue;
-            write_queue();
-            push(@builds, $building);
-            next;
-          }
+          emit("Equalizing storage levels") if $quiet && $sleepy;
+          emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+          @queue = map { s/^\-//; $_; } @queue;
+          write_queue();
+          push(@builds, $building);
+          next;
         }
 
         $type = (sort { $ratio{$b} <=> $ratio{$a} } grep { !$ignore{$_} } keys %ratio)[2];
@@ -512,7 +507,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
                         @buildings;
           if (@storage) {
             my $building = $storage[0];
-            my $message = upgrade_check($building, 1);
+            my ($upgrade, $message) = attempt_upgrade($building, 1);
             if ($message) {
               emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
               if ($queue[$j] !~ /^\-/) {
@@ -521,15 +516,12 @@ for (my $j = $[; $j <= $#queue; $j++) {
               }
               next;
             }
-            else {
-              my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
-              emit("Near storage limit for $type") if $quiet && $sleepy;
-              emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
-              @queue = map { s/^\-//; $_; } @queue;
-              write_queue();
-              push(@builds, $building);
-              next;
-            }
+            emit("Near storage limit for $type") if $quiet && $sleepy;
+            emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+            @queue = map { s/^\-//; $_; } @queue;
+            write_queue();
+            push(@builds, $building);
+            next;
           }
         }
       }
@@ -616,7 +608,7 @@ for (my $j = $[; $j <= $#queue; $j++) {
       }
       next;
     }
-    my $message = upgrade_check($building, 1);
+    my ($upgrade, $message) = attempt_upgrade($building, 1);
     if ($message) {
       emit("Cannot upgrade $building->{level} $building->{name}: $message") unless $quiet && $sleepy;
       if ($queue[$j] !~ /^\-/) {
@@ -625,22 +617,19 @@ for (my $j = $[; $j <= $#queue; $j++) {
       }
       next;
     }
-    else {
-      my $upgrade = $client->building_upgrade($building->{url}, $building->{id});
-      if ($quiet && $sleepy) {
-        emit("Want to upgrade $type production");
-        for my $building (@buildings) {
-          printf("%s payoff ratio: %7.2f: c_t %5.2f, c_p %5.2f, wait %5.2f: %d %s\n",
-                 $type, $building->{payoff_ratio},
-                 $building->{cost_time}, $building->{cost_prod}, $building->{delay},
-                 $building->{level}, $building->{name});
-        }
+    if ($quiet && $sleepy) {
+      emit("Want to upgrade $type production");
+      for my $building (@buildings) {
+        printf("%s payoff ratio: %7.2f: c_t %5.2f, c_p %5.2f, wait %5.2f: %d %s\n",
+               $type, $building->{payoff_ratio},
+               $building->{cost_time}, $building->{cost_prod}, $building->{delay},
+               $building->{level}, $building->{name});
       }
-      emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
-      @queue = map { s/^\-//; $_; } @queue;
-      write_queue();
-      push(@builds, $building);
     }
+    emit("Upgrading $building->{level} $building->{name}, complete at ".Client::format_time(Client::parse_time($upgrade->{building}{pending_build}{end})));
+    @queue = map { s/^\-//; $_; } @queue;
+    write_queue();
+    push(@builds, $building);
   }
 }
 
@@ -648,6 +637,8 @@ sub upgrade_check {
   my $building = shift;
   my $side_effects = shift;
   return "Undefined building." unless $building;
+  return "Efficiency is $building->{efficiency}%; repair before upgrading."
+    if defined $building->{efficiency} && $building->{efficiency} < 100;
   $building = populate_building_with_production($building);
   my @buildings = values(%{$buildings->{buildings}});
   my $depot = List::Util::first { $_->{url} =~ /subspacesupplydepot/ } @buildings;
@@ -685,9 +676,33 @@ sub upgrade_check {
       if $delta < 0 && $status->{"${_}_hour"} < -$delta;
   }
   return "Unsustainable (local pre-check): not enough ".join(", ", @message)." production" if @message;
-  my $view = $client->building_view($building->{url}, $building->{id})->{building};
-  return $view->{upgrade}{reason}[1] unless $view->{upgrade}{can};
+  my $view = $client->building_view_cached($building->{id});
+  return $view->{building}{upgrade}{reason}[1] if $view && !$view->{building}{upgrade}{can};
   return;
+}
+
+# Gate with upgrade_check, then attempt the upgrade.  With no cached denial
+# the attempt is the check: a successful upgrade costs one RPC instead of
+# two, and a failed one is recorded as a building_view denial straight from
+# the exception (so retries within the TTL cost nothing).  Codes other than
+# building denials - notably the RPC-limit short-circuit, which also throws
+# 1010 - are reported but never cached.
+sub attempt_upgrade {
+  my $building = shift;
+  my $side_effects = shift;
+
+  my $message = upgrade_check($building, $side_effects);
+  return (undef, $message) if $message;
+
+  my $upgrade = eval { $client->building_upgrade($building->{url}, $building->{id}) };
+  return ($upgrade, undef) if $upgrade;
+  my $e = Exception::Class->caught('LacunaRPCException');
+  if ($e) {
+    $client->cache_building_denial($building->{id}, $e->code, $e->text);
+    return (undef, $e->text);
+  }
+  my $e2 = Exception::Class->caught();
+  ref $e2 ? $e2->rethrow : die $e2;
 }
 
 sub duration {
