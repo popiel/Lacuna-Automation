@@ -8,6 +8,10 @@
 #     of zone; which ED was used to fetch the link only decides which zone
 #     the vote counts for
 #   * every zone's ED sees the same global pool of available link names
+#   * the vote URL embeds the fetching ED's building_id - that is how the
+#     vote is credited to the ED's zone - while the host and session_id
+#     are run-wide and each name's site_url is fixed, so any zone's URL
+#     can be synthesized from another zone's fetch by swapping building_id
 #   * entertainment/get_lottery_voting_options returns a success response
 #     with an empty options list once everything available has been followed
 #     (the web client renders that state as "You have voted as many times
@@ -103,7 +107,7 @@ unless (@links) {
 
 save_state();
 
-my $followed = burst();
+my $followed = burst(\@links);
 
 $state->{settled} = 1;
 save_state();
@@ -262,44 +266,54 @@ sub probe {
     return $result;
 }
 
+# Each zone's URL for a given link differs from the probe's only in its
+# building_id (the ED that fetched the options), which is what credits the
+# vote to that zone; host, session and site_url are all carried over.  If a
+# URL does not match the expected shape, fall back to it unchanged - the
+# vote still counts, just for the probe ED's own zone.
+sub vote_url {
+    my $url = shift;
+    my $ed  = shift;
+
+    return $url unless $url =~ /[?&]building_id=\d+/;
+    $url =~ s/([?&]building_id=)\d+/$1$ed/;
+    return $url;
+}
+
+# Every link the probe saw is voted exactly once, spread round-robin over
+# the zones so no zone duplicates before every zone has voted once.  The
+# pool only shrinks during a run (links regenerate 24h after their last
+# use), and each zone's URL is synthesized from the probe's, so no
+# re-fetches are needed: the whole burst is one API call old (the probe).
 sub burst {
+    my $links = shift;
+
     my $ua = LWP::UserAgent->new(
         timeout => 60,
         # follow redirects until a non-3xx status arrives (default, 7 hops max)
         agent => "Mozilla/5.0 (compatible; LacunaAutomation entertainment.pl)",
     );
 
+    my @zones = shuffle keys %{$state->{zones}};
+    my $zone_index = 0;
+
     my $followed = 0;
-    while (1) {
-        my @zones = shuffle keys %{$state->{zones}};
-        my $acted = 0;
-        for my $zone (@zones) {
-            my $ed = $state->{zones}{$zone}{ed_id};
-            my $result = eval { $client->call(entertainment => get_lottery_voting_options => $ed) };
-            unless ($result) {
-                my $error = $@ // "unknown error";
-                emit("could not get voting options for zone $zone: $error");
-                next;
-            }
-            my @links = @{ $result->{options} // [] };
-            track_links(map { $_->{name} } @links);
-            next unless @links;
-            my $pick = $links[int rand @links];
-            emit("zone $zone: voting via $pick->{name} at $pick->{url}");
-            my $response = $ua->get($pick->{url});
-            my $label = eval { $response->status_line };
-            $label = "no response" unless defined $label;
-            emit("zone $zone: visit returned $label");
-            my $used = strftime("%Y-%m-%d %H:%M:%S", localtime());
-            $state->{last_used} = $used;
-            $state->{links}{$pick->{name}} = $used;
-            $state->{votes}++;
-            save_state();
-            $acted++;
-            $followed++;
-            sleep($click_base + int rand $click_jitter);
-        }
-        last unless $acted;
+    while (@$links) {
+        my $zone = $zones[$zone_index++ % @zones];
+        my $pick = shift @$links;
+        my $url  = vote_url($pick->{url}, $state->{zones}{$zone}{ed_id});
+        emit("zone $zone: voting via $pick->{name} at $url");
+        my $response = $ua->get($url);
+        my $label = eval { $response->status_line };
+        $label = "no response" unless defined $label;
+        emit("zone $zone: visit returned $label");
+        my $used = strftime("%Y-%m-%d %H:%M:%S", localtime());
+        $state->{last_used} = $used;
+        $state->{links}{$pick->{name}} = $used;
+        $state->{votes}++;
+        save_state();
+        $followed++;
+        sleep($click_base + int rand $click_jitter);
     }
     return $followed;
 }
