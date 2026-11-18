@@ -379,7 +379,7 @@ sub scow_dump {
         @{$ships->{available}}
     ) {
         my $result = eval {
-            $client->call(spaceport => send_ship => $scow->{id}, $target) unless $opts{'dry-run'};
+            $client->send_ship($scow->{id}, $target) unless $opts{'dry-run'};
         };
         if ( $@ ) {
             verbose("Sending scow $scow->{id} failed: $!");

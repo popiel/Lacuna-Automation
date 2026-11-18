@@ -68,7 +68,7 @@ emit("Using ship: $scow->{id}") if $debug;
 
 exit(0) unless $scow;
 
-my $result = $client->call(spaceport => send_ship => $scow->{id}, $target);
+my $result = $client->send_ship($scow->{id}, $target);
 
 emit("Sent scow to $status->{star_name}");
 

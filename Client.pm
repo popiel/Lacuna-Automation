@@ -948,6 +948,89 @@ sub get_glyphs {
   return $result;
 }
 
+# Expiry for a cached view_all_ships snapshot: the first pending state
+# change among the listed ships (a build finishing, a travelling ship
+# arriving), or an hour, whichever comes first.
+sub _ships_invalid {
+  my $self = shift;
+  my $ships = shift;
+
+  my @completions;
+  for my $ship (@$ships) {
+    if ($ship->{date_available}) {
+      my $available = parse_time($ship->{date_available});
+      push(@completions, $available) if $available > time() + 30;
+    }
+    push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
+  }
+  return List::Util::min(time() + 3600, @completions);
+}
+
+# The cached view_all_ships entry for a body is the maintained list of
+# that body's ships: send_ship and yard_build edit it in place, so cache
+# hits serve current ship state without a refetch.  Each list edit
+# recomputes the expiry, so the next pending state change still forces a
+# refetch (arrived ships leave the list, so nothing models that locally).
+sub _ships_cache_send {
+  my $self = shift;
+  my $ship = shift;
+
+  # Send responses carry no body id in their status; use the ship's origin.
+  my $body_id = $ship->{from}{id} or return;
+  my $entry = $self->read_json($self->_cache_path('spaceport_view_all_ships', $body_id));
+  return unless $entry;
+  my $ships = $entry->{ships} or return;
+  for my $i (0 .. $#{$ships}) {
+    next unless defined $ships->[$i]{id} && $ships->[$i]{id} == $ship->{id};
+    $ships->[$i] = $ship;
+    $self->cache_write( type => 'spaceport_view_all_ships', id => $body_id,
+                        data => $entry, invalid => $self->_ships_invalid($ships) );
+    return;
+  }
+  # The ship isn't in the cached list, so the entry predates it and can't
+  # be trusted; drop it rather than leave a phantom Docked ship behind.
+  $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $body_id );
+}
+
+# Queue entries from a build response (id, type, date_completed only)
+# become Building ships in the maintained list, as view_all_ships itself
+# reports them.  The recomputed expiry lands on the earliest completion,
+# so the server's full records replace these as soon as a ship finishes.
+sub _ships_cache_build {
+  my $self = shift;
+  my $body_id = shift;
+  my $building = shift;
+
+  return unless $body_id && @$building;
+  my $entry = $self->read_json($self->_cache_path('spaceport_view_all_ships', $body_id));
+  return unless $entry;
+  my $ships = $entry->{ships} ||= [];
+  my %have = map { ($_->{id} => 1) } @$ships;
+  for my $ship (@$building) {
+    next if !$ship->{id} || $have{$ship->{id}};
+    $have{$ship->{id}} = 1;
+    push @$ships, {
+      id => $ship->{id},
+      type => $ship->{type},
+      type_human => $ship->{type_human},
+      name => $ship->{type_human},
+      task => 'Building',
+      date_available => $ship->{date_completed},
+      payload => [],
+      number_of_docks => 1,
+      hold_size => 0,
+      combat => 0,
+      stealth => 0,
+      max_occupants => 0,
+      can_recall => 0,
+      can_scuttle => 0,
+      fleet_speed => 0,
+    };
+  }
+  $self->cache_write( type => 'spaceport_view_all_ships', id => $body_id,
+                      data => $entry, invalid => $self->_ships_invalid($ships) );
+}
+
 sub port_all_ships {
   my $self = shift;
   my $building_id = shift;
@@ -968,16 +1051,8 @@ sub port_all_ships {
   $result = $self->call(spaceport => view_all_ships => $building_id, { no_paging => 1 });
   push(@ships, @{$result->{ships}});
   $result->{ships} = [ @ships ];
-  my @completions;
-  for my $ship (@{$result->{ships}}) {
-    if ($ship->{date_available}) {
-      my $available = parse_time($ship->{date_available});
-      push(@completions, $available) if $available > time() + 30;
-    }
-    push(@completions, parse_time($ship->{date_arrives})) if $ship->{date_arrives};
-  }
-  my $invalid = List::Util::min(time() + 3600, @completions);
-  $self->cache_write( type => 'spaceport_view_all_ships', id => $body_id, data => $result, invalid => $invalid );
+  $self->cache_write( type => 'spaceport_view_all_ships', id => $body_id,
+                      data => $result, invalid => $self->_ships_invalid($result->{ships}) );
   return $result;
 }
 
@@ -1043,7 +1118,10 @@ sub send_ship {
 
   my $result = $self->call(spaceport => send_ship => $ship, $target);
   if ($result) {
-    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
+    # The response's status has no body id (the old body-based
+    # invalidation here never fired), but result.ship is a full,
+    # authoritative record for the sent ship.
+    $self->_ships_cache_send( $result->{ship} );
   }
   return $result;
 }
@@ -1164,11 +1242,14 @@ sub yard_build {
       }
       my $invalid = List::Util::min(time() + 3600, @completions);
       $self->cache_write( type => 'shipyard_view_build_queue', id => $building_id, data => $result, invalid => $invalid );
+      # The queued ships belong in the body's maintained ship list too.
+      $self->_ships_cache_build( $result->{status}{body}{id}, \@ships );
     }
     else {
       $self->cache_invalidate( type => 'shipyard_view_build_queue', id => $building_id );
+      # A truncated response can't be trusted for the ship list either.
+      $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
     }
-    $self->cache_invalidate( type => 'spaceport_view_all_ships', id => $result->{status}{body}{id} );
   }
   return $result;
 }
