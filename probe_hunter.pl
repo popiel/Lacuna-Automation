@@ -316,6 +316,7 @@ sub run {
       my $target = find_target($body_id, $body);
       last unless $target;
       $claimed{$target->{id}} = 1;
+      my $arrives;
       unless ($noaction) {
         my $result = eval { $client->send_ship($probe->{id}, { star_id => $target->{id} }); };
         if (!$result) {
@@ -328,7 +329,7 @@ sub run {
         # cached list right when this probe is due to arrive.  Needed even
         # though the travelling-ship sweep covers later runs: a probe that
         # lands between two runs is no longer travelling by then.
-        my $arrives = Client::parse_time($result->{ship}{date_arrives});
+        $arrives = Client::parse_time($result->{ship}{date_arrives});
         if ($arrives) {
           $client->cache_revalidate(type => 'observatory_get_probed_stars',
                                     id  => $obs{$body_id}{id}, invalid => $arrives + 60);
@@ -338,7 +339,9 @@ sub run {
       $sent{$body_id}++;
       $sent_total++;
       $en_route{$target->{id}} = 1;
-      emit("Sent probe to $target->{name} at ($target->{x},$target->{y})", $body_names{$body_id});
+      my $message = "Sent probe to $target->{name} at ($target->{x},$target->{y})";
+      $message .= ", arriving " . Client::format_time($arrives) if $arrives;
+      emit($message, $body_names{$body_id});
     }
   }
 
