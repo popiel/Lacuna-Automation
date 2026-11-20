@@ -16,7 +16,8 @@ BEGIN {
 }
 require $script;
 
-our ($noaction, $quiet, $star_db, @zones, %claimed, %en_route, %sitting);
+our ($noaction, $quiet, $star_db, @zones, %claimed, %en_route, %sitting,
+     $retain_radius, @colony_coords);
 
 $noaction = 1;
 $quiet    = 1;
@@ -53,6 +54,88 @@ subtest 'should_abandon' => sub {
   ok(!should_abandon(5, 0, 1),  'desirable orbit present -> keep');
   ok(!should_abandon(0, 1, 1),  'not explored and threats -> keep');
   ok(should_abandon(1, 0, 0),   'single orbital, clean -> abandon');
+};
+
+# --- colony_coords_from_status -------------------------------------------
+subtest 'colony_coords_from_status' => sub {
+  plan tests => 4;
+  my $status = {
+    id     => 46,
+    bodies => { colonies => [
+      { empire_id => 46, x => 10, y => -20, name => 'Mine' },
+      { empire_id => 99, x => 500, y => 500, name => 'Alliance mate' },
+      { empire_id => 46, name => 'NoCoords' },
+    ] },
+  };
+  my @coords = colony_coords_from_status($status);
+  is(scalar @coords, 1, 'foreign colonies and coordinate-less bodies skipped');
+  is_deeply($coords[0], [10, -20], 'own colony coordinates returned');
+
+  @coords = colony_coords_from_status({ id => 46 });
+  is(scalar @coords, 0, 'missing bodies key -> empty list');
+
+  @coords = colony_coords_from_status({ id => 46, bodies => { colonies => [] } });
+  is(scalar @coords, 0, 'empty colonies list -> empty list');
+};
+
+# --- occupied_body_count from the observatory probe output ----------------
+subtest 'occupied_body_count' => sub {
+  plan tests => 5;
+  my $star = { bodies => [
+    { orbit => 3, x =>   5, y =>   5, image => 'p11-3', empire => undef, station => undef },
+    { orbit => 4, x =>  10, y =>  10, image => 'p33-4',
+      empire => { id => 46, name => 'The Hidden Agenda' }, station => undef },
+    { orbit => 5, x =>  12, y =>  16, image => 'p35-5',
+      empire => undef, station => { id => 12345 } },
+  ] };
+  is(occupied_body_count($star), 2, 'colonized and station-controlled bodies count');
+  is(occupied_body_count({ bodies => [] }), 0, 'no bodies -> 0');
+  is(occupied_body_count({}), 0, 'missing bodies key -> 0');
+  is(occupied_body_count({ bodies => [ { empire => undef, station => undef } ] }),
+     0, 'unoccupied bodies -> 0');
+  is(occupied_body_count({ bodies => [ { empire => { id => 99 }, station => { id => 1 } } ] }),
+     1, 'each body counted once even when both occupied');
+};
+
+# --- desirable_orbit_count from the observatory probe output --------------
+subtest 'desirable_orbit_count' => sub {
+  plan tests => 8;
+  my $star = {
+    id     => 1,
+    bodies => [
+      { orbit => 3, x =>   5, y =>   5, image => 'p11-3' },
+      { orbit => 4, x =>  10, y =>  10, image => 'p33-4' },
+      { orbit => 5, x =>  12, y =>  16, image => 'p35-5' },
+      { orbit => 2, x =>  21, y =>   0, image => 'p12-2' },
+      { orbit => 1, x =>   1, y =>   1, image => 'p11-1' },
+      { orbit => 6, x =>   2, y =>   2, image => 'a3-6'  },
+      { orbit => 7, x => 200, y => 200, image => 'p11-7' },
+    ],
+  };
+
+  $retain_radius = 20;
+
+  @colony_coords = ( [0, 0] );
+  is(desirable_orbit_count($star), 2, 'near p11 and boundary p35 count, p33 does not');
+  is(desirable_orbit_count({ id => 2, bodies => [] }), 0, 'no bodies -> 0');
+  is(desirable_orbit_count({ id => 3 }), 0, 'missing bodies key -> 0');
+
+  @colony_coords = ( [0, 0], [100, 100] );
+  is(desirable_orbit_count($star), 2, 'distant colony adds nothing for star 1');
+  my $star2 = { bodies => [
+    { orbit => 3, x => 100, y => 100, image => 'p11-3' },
+    { orbit => 4, x =>  90, y => 100, image => 'p35-4' },
+    { orbit => 5, x =>   0, y =>   0,  image => 'p11-5' },
+  ] };
+  is(desirable_orbit_count($star2), 3, 'orbitals near either colony count');
+  is(desirable_orbit_count({ bodies => [ { orbit => 3, x => 0, y => 0, image => 'p33-3' } ] }),
+     0, 'p33 never retains even at a colony');
+
+  @colony_coords = ( [-8, 0] );
+  is(desirable_orbit_count($star), 1, 'only orbitals within radius of the colony count');
+
+  @colony_coords = ();
+  is(desirable_orbit_count($star), 0, 'no colonies -> nothing desirable');
 };
 
 # --- find_target against a temp SQLite DB --------------------------------

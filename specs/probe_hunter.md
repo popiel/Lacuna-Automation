@@ -17,6 +17,15 @@ Find unprobed stars in the requested zones and use the supplied bases to:
   in addition to stars that already have probes en route.
 - The number of probes to build is the minimum of the number needed to reach
   three docked probes and the number of free space-port slots.
+- A sitting probe is retained only for a desirable orbit: subtype `p11`,
+  `p12`, or `p35` (not `p33`) on orbits 2 through 5, within 20 units of one of
+  the empire's own colonies. The orbit's subtype and coordinates come from the
+  star's `bodies` array in the observatory's `get_probed_stars` response
+  (subtype is the `image` prefix, e.g. `p35-4` -> `p35`), not from `stars.db`.
+  Colony coordinates come from the `bodies.colonies` list in `empire_status`
+  (entries matching the empire's own id; space stations are not colonies). With
+  no colonies, nothing is desirable and every explored probe is a candidate for
+  abandonment.
 - If a sitting probe is at a star with no orbitals in `stars.db`, the script
   closes the DB, invokes `star_db_util.pl`, reopens the DB, and rechecks before
   abandoning.
@@ -89,11 +98,15 @@ Usage: `./run_perl.sh probe_hunter.pl --zone X|Y --body Name [--config file] [--
 For each star in each valid body's observatory stars list, abandon the probe
 only if all of the following hold:
 
-- **C1 explored:** orbitals exist for the star.
-- **C2 no colony or station:** no orbital for the star has a colony or a
-  station. `stars.station_id` is not consulted.
+- **C1 explored:** orbitals exist for the star in `stars.db`; a probe is never
+  abandoned before its star's data has been recorded there.
+- **C2 no colony or station:** no body of the star has an `empire` or a
+  `station` in the observatory's probed-star response. `stars.station_id` is
+  not consulted.
 - **C3 no desirable orbits:** no orbital on orbits 2 through 5 has subtype
-  `p11`, `p12`, `p33`, or `p35`.
+  `p11`, `p12`, or `p35` and lies within 20 units of one of the empire's own
+  colonies. Subtypes, orbits, and coordinates are read from the star's `bodies`
+  in the observatory's probed-star response.
 
 Call `abandon_probe`. On success, decrement the local `star_count`. On RPC
 failure, keep the probe.

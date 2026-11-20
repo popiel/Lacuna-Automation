@@ -25,6 +25,28 @@ definitions are in `../lacuna_server/mission/missions/*.mission`; each file's
 `max_university_level` is the highest university level at which the mission is
 still offered (see `bin/mission_check.pl`).
 
+## Running Perl
+
+Always run Perl scripts (and tests) through the repo wrapper, never by
+invoking Strawberry's perl.exe directly:
+
+    ./run_perl.sh probe_hunter.pl --help
+    ./run_perl.sh t/test_probe_hunter.t.pl
+
+The wrapper prepends `$STRAWBERRY/c/bin` to `PATH` so `Client.pm` finds the
+OpenSSL DLLs it needs for HTTPS RPC calls, and honors a `STRAWBERRY` override
+for non-default install locations. A direct call like
+`C:/Strawberry/perl/bin/perl.exe script.pl` skips that environment and can
+fail on HTTPS.
+
+## Ad-hoc JSON parsing
+
+Prefer `jq` when inspecting JSON blobs by hand (the `cache/` response files,
+saved API payloads) instead of writing throwaway Perl one-liners:
+
+    jq '.stars[0].bodies[] | {orbit, x, y, image}' \
+      cache/The_Hidden_Agenda_933478/building/0/get_probed_stars
+
 ## Logging
 
 NEVER modify, clean, rewrite, or delete anything in existing log files (e.g.

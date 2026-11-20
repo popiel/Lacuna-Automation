@@ -36,6 +36,10 @@ our %claimed    = ();
 our %en_route   = ();
 our %sitting    = ();
 
+our $retain_radius   = 20;
+our %retain_subtypes = map { $_ => 1 } qw(p11 p12 p35);
+our @colony_coords   = ();
+
 sub usage {
   print <<"END";
 Usage: $0 --zone X|Y --body Name [--zone X|Y --body Name ...] [options]
@@ -130,6 +134,41 @@ sub should_abandon {
   return 1;
 }
 
+sub colony_coords_from_status {
+  my ($empire_status) = @_;
+  my $empire_id = $empire_status->{id};
+  return map  { [ $_->{x} + 0, $_->{y} + 0 ] }
+         grep { defined $_->{x} && defined $_->{y} }
+         grep { !defined $empire_id || !defined $_->{empire_id} || $_->{empire_id} == $empire_id }
+         @{ $empire_status->{bodies}{colonies} || [] };
+}
+
+sub desirable_orbit_count {
+  my ($star) = @_;
+  return 0 unless @colony_coords;
+  my $radius2 = $retain_radius * $retain_radius;
+  my $count   = 0;
+  for my $body (@{$star->{bodies} || []}) {
+    (my $subtype = $body->{image} // '') =~ s/-.*//;
+    next unless $retain_subtypes{$subtype};
+    my $orbit = $body->{orbit} // 0;
+    next unless $orbit >= 2 && $orbit <= 5;
+    next unless defined $body->{x} && defined $body->{y};
+    for my $colony (@colony_coords) {
+      my $dx = $body->{x} - $colony->[0];
+      my $dy = $body->{y} - $colony->[1];
+      if ($dx * $dx + $dy * $dy <= $radius2) { $count++; last }
+    }
+  }
+  return $count;
+}
+
+sub occupied_body_count {
+  my ($star) = @_;
+  return scalar grep { ($_->{empire} && $_->{empire}{id}) || ($_->{station} && $_->{station}{id}) }
+                 @{$star->{bodies} || []};
+}
+
 sub open_star_db {
   my $file = shift;
   -f $file or die "Database does not exist ($file), run star_db_util.pl --create-db\n";
@@ -179,6 +218,8 @@ sub run {
   $client->cache_invalidate(type => 'empire_status');
   my $empire_status = $client->empire_status;
   $empire_name = $empire_status->{name};
+  @colony_coords = colony_coords_from_status($empire_status);
+  emit("Retaining probes near " . scalar(@colony_coords) . " colonies (within $retain_radius units)") if $debug;
 
   my $planets = $empire_status->{planets};
   my @body_ids = map { $client->match_planet($_) } @body_names;
@@ -287,12 +328,8 @@ sub run {
     my $stars  = $probed_stars{$body_id};
     for my $star (@{$stars->{stars}}) {
       my $orb_count = $star_db->selectrow_array('select count(*) from orbitals where star_id = ?', {}, $star->{id});
-      my $cs = $star_db->selectrow_array(
-        'select count(*) from orbitals where star_id = ? and (empire_id is not null or station_id is not null)',
-        {}, $star->{id});
-      my $des = $star_db->selectrow_array(
-        'select count(*) from orbitals where star_id = ? and orbit between 2 and 5 and subtype in (?,?,?,?)',
-        {}, $star->{id}, 'p11', 'p12', 'p33', 'p35');
+      my $cs = occupied_body_count($star);
+      my $des = desirable_orbit_count($star);
       next unless should_abandon($orb_count, $cs, $des);
       unless ($noaction) {
         eval { $client->abandon_probe($obs_id, $star->{id}); 1; }
