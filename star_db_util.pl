@@ -733,6 +733,9 @@ SQL
 CREATE INDEX zone on stars(zone)
 SQL
         <<SQL,
+CREATE INDEX star_y on stars(y)
+SQL
+        <<SQL,
 CREATE INDEX empire_id on empires(id)
 SQL
 }
@@ -797,6 +800,10 @@ sub upgrade_star_db {
                 'alter table orbitals add station_id int',
                 'alter table stars add station_id int',
             ],
+        ],
+        [
+            'select y from stars indexed by star_y limit 1',
+            ['create index if not exists star_y on stars(y)'],
         ],
     );
 

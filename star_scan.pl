@@ -45,8 +45,10 @@ Usage: $0 [options]
 
   Rows are ordered so that rows closest to a multiple of 500 (in y) are
   fetched first.  Rows already holding more than --max-row-stars stars in the
-  database are skipped.  Fetching stops once only --keep RPC calls remain
-  available.
+  database are skipped, as are rows previously scanned and found empty
+  (recorded with 0 stars in the row_scan table).  Each successful fetch is
+  recorded in row_scan, so rows found empty are never fetched again.
+  Fetching stops once only --keep RPC calls remain available.
 
   Intended to be run by scheduler 10 minutes before the daily RPC count reset,
   burning down the day's remaining RPC calls to --keep (default 5).
@@ -120,6 +122,20 @@ sub check_schema {
   return;
 }
 
+# Make sure the row_scan table exists.  Returns true if row_scan lookups
+# should be performed.  In --noaction mode the table is only used if it
+# already exists, so no database writes happen.
+sub ensure_row_scan_table {
+  my ($dbh, $noaction) = @_;
+  if ($noaction) {
+    return $dbh->selectrow_array(
+      "select 1 from sqlite_master where type = 'table' and name = 'row_scan'") ? 1 : 0;
+  }
+  $dbh->do('create table if not exists row_scan '
+    . '(y int primary key, scanned datetime, stars int)');
+  return 1;
+}
+
 sub upsert_star {
   my ($dbh, $star, $now) = @_;
   my $exists = $dbh->selectrow_array('select id from stars where x = ? and y = ?', {},
@@ -142,6 +158,7 @@ my $client = Client->new(config => $config_name);
 
 my $dbh = open_star_db($db_file);
 check_schema($dbh);
+my $use_row_scan = ensure_row_scan_table($dbh, $noaction);
 
 # Map bounds from server status, with a sane fallback.
 my $ymin = -2000;
@@ -167,6 +184,7 @@ my @rows = sort {
 my $fetched_rows = 0;
 my $inserted     = 0;
 my $skipped_rows = 0;
+my $skipped_empty = 0;
 my $fetched_any  = 0;
 my $stop_reason  = "no more rows";
 
@@ -178,6 +196,15 @@ for my $y (@rows) {
   if ($count > $max_row_stars) {
     $skipped_rows++;
     next ROW;
+  }
+
+  if ($use_row_scan) {
+    my ($scanned_stars) = $dbh->selectrow_array('select stars from row_scan where y = ?', {}, $y);
+    if (defined $scanned_stars && $scanned_stars == 0) {
+      $skipped_empty++;
+      emit("Skipping row y=$y: recorded empty in row_scan") if $debug;
+      next ROW;
+    }
   }
 
   emit("Fetching row y=$y")
@@ -209,6 +236,8 @@ for my $y (@rows) {
     upsert_star($dbh, $star, $now);
     $inserted++;
   }
+  $dbh->do('insert or replace into row_scan (y, scanned, stars) values (?, ?, ?)', {},
+    $y, $now, $row_count) unless $noaction;
   $dbh->commit unless $noaction;
 
   emit("Fetched $row_count stars from row y=$y")
@@ -227,4 +256,5 @@ if (!$noaction && $fetched_any && rpc_remaining($client) <= $keep_rpc) {
 }
 
 emit("Done: fetched_rows=$fetched_rows inserted=$inserted skipped_rows(>=$max_row_stars stars)="
-     . $skipped_rows . " rpc_remaining=" . rpc_remaining($client) . " ($stop_reason)");
+     . $skipped_rows . " skipped_empty_rows=" . $skipped_empty
+     . " rpc_remaining=" . rpc_remaining($client) . " ($stop_reason)");
