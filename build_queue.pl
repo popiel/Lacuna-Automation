@@ -15,6 +15,8 @@ use IO::Handle;
 use JSON::PP;
 use List::Util qw(max first);
 
+use constant EFFECTIVELY_NEVER => 60 * 86400;
+
 autoflush STDOUT 1;
 autoflush STDERR 1;
 
@@ -664,8 +666,13 @@ sub upgrade_check {
       }
       $status = $client->body_status($body_id);
     }
-    push(@message, "$_ (".$status->{"${_}_stored"}."/".$building->{upgrade}{cost}{$_}.", ".duration(($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) * 3600 / $status->{"${_}_hour"}).")")
-      if $status->{"${_}_stored"} < $building->{upgrade}{cost}{$_};
+    if ($status->{"${_}_stored"} < $building->{upgrade}{cost}{$_}) {
+      my $rate = $status->{"${_}_hour"} // 0;
+      my $wait = $rate > 0
+        ? ($building->{upgrade}{cost}{$_} - $status->{"${_}_stored"}) * 3600 / $rate
+        : EFFECTIVELY_NEVER;
+      push(@message, "$_ (".$status->{"${_}_stored"}."/".$building->{upgrade}{cost}{$_}.", ".duration($wait).")");
+    }
   }
   return "Not enough ".join(", ", @message)." in storage to build this." if @message;
   # Local pre-check, no server call.  upgrade.production.X_hour is the

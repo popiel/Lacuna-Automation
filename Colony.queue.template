@@ -1,0 +1,17 @@
+build -5 5 Wheat Farm
+build -5 3 Mine
+build -5 2 Geo Energy Plant
+build -5 1 Water Purification Plant
+build 5 5 Food Reserve
+build 5 4 Ore Storage Tanks
+build 5 3 Energy Reserve
+build 5 2 Water Storage Tank
+build -5 0 Waste Recycling Center
+build 1 -1 Entertainment District
+build 2 -1 Network 19 Affiliate
+build 0 -1 University
+build 0 1 Space Port
+build 1 1 Shipyard
+build -1 1 Trade Ministry
+build 0 -2 Development Ministry
+
