@@ -32,6 +32,7 @@ invoking Strawberry's perl.exe directly:
 
     ./run_perl.sh probe_hunter.pl --help
     ./run_perl.sh t/test_probe_hunter.t.pl
+    ./run_perl.sh t/test_build_queue.t.pl
 
 The wrapper prepends `$STRAWBERRY/c/bin` to `PATH` so `Client.pm` finds the
 OpenSSL DLLs it needs for HTTPS RPC calls, and honors a `STRAWBERRY` override
