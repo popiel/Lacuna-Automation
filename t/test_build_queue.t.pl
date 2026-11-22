@@ -140,6 +140,19 @@ sub stats_client {
   });
 }
 
+sub denied_client {
+  my (%args) = @_;
+  my $stats = $args{stats};
+  return FakeClient->new(responses => {
+    body_status => sub { $args{status} },
+    building_stats_for_level => sub {
+      my (undef, $url, $id, $level) = @_;
+      return { building => $stats->{$id} || {} };
+    },
+    building_view_cached => { building => { upgrade => { can => 0, reason => ['code', 'It forms naturally.'] } } },
+  });
+}
+
 sub end_after {
   my $seconds = shift;
   my @t = gmtime(time() + $seconds);
@@ -283,6 +296,85 @@ subtest 'upgrade_check' => sub {
   is($transmits, 3, 'depot called until stored covers the cost');
   unlike($message, qr/Not enough/, 'depot transmissions satisfied the shortfall');
 
+  # depot with under an hour of work left: no transmissions, shortfall reported
+  $transmits = 0;
+  $client = FakeClient->new(responses => {
+    body_status => sub {
+      my %s = (%$status);
+      $s{energy_stored} += 3600 * $transmits;
+      return \%s;
+    },
+    building_stats_for_level => sub {
+      { building => { upgrade => { cost => $cost_big, production => { energy_hour => 0 } } } }
+    },
+    depot_transmit => sub {
+      $transmits++;
+      return { building => { work => { seconds_remaining => 7200 } } };
+    },
+    building_view_cached => { building => { upgrade => { can => 1 } } },
+  });
+  $buildings = { buildings => {
+    1 => { %$building },
+    99 => { id => 99, url => '/subspacesupplydepot', work => { seconds_remaining => 100 } },
+  } };
+  $message = upgrade_check($building, 1);
+  is($transmits, 0, 'no depot pull with under an hour of work left');
+  like($message, qr/energy \(40\/8000,/, 'shortfall reported without the depot');
+
+  # storage too full for a depot pull: shortfall reported without transmitting
+  $status->{energy_capacity} = 4000;
+  $status->{energy_stored} = 3600;
+  my $cost_mid = modest_cost(energy => 3900);
+  $building->{upgrade} = { cost => $cost_mid, production => { energy_hour => 0 } };
+  $transmits = 0;
+  $buildings = { buildings => {
+    1 => { %$building },
+    99 => { id => 99, url => '/subspacesupplydepot', work => { seconds_remaining => 7200 } },
+  } };
+  $client = FakeClient->new(responses => {
+    body_status => sub { $status },
+    building_stats_for_level => sub {
+      { building => { upgrade => { cost => $cost_mid, production => { energy_hour => 0 } } } }
+    },
+    depot_transmit => sub {
+      $transmits++;
+      return { building => { work => { seconds_remaining => 7200 } } };
+    },
+    building_view_cached => { building => { upgrade => { can => 1 } } },
+  });
+  $message = upgrade_check($building, 1);
+  is($transmits, 0, 'no depot pull when storage is near capacity');
+  like($message, qr/energy \(3600\/3900,/, 'shortfall reported despite the depot');
+
+  # depot work running low mid-fill: partial pulls then the shortfall reported
+  $status->{energy_capacity} = 25000;
+  $status->{energy_stored} = 40;
+  my $cost_huge = modest_cost(energy => 20000);
+  $building->{upgrade} = { cost => $cost_huge, production => { energy_hour => 0 } };
+  $transmits = 0;
+  $buildings = { buildings => {
+    1 => { %$building },
+    99 => { id => 99, url => '/subspacesupplydepot', work => { seconds_remaining => 7200 } },
+  } };
+  $client = FakeClient->new(responses => {
+    body_status => sub {
+      my %s = (%$status);
+      $s{energy_stored} += 3600 * $transmits;
+      return \%s;
+    },
+    building_stats_for_level => sub {
+      { building => { upgrade => { cost => $cost_huge, production => { energy_hour => 0 } } } }
+    },
+    depot_transmit => sub {
+      $transmits++;
+      return { building => { work => { seconds_remaining => 7200 - 1800 * $transmits } } };
+    },
+    building_view_cached => { building => { upgrade => { can => 1 } } },
+  });
+  $message = upgrade_check($building, 1);
+  is($transmits, 3, 'depot pulls stop when the work runs low');
+  like($message, qr/energy \(10840\/20000,/, 'partial depot fill still reports the shortfall');
+
   # unsustainability pre-check
   my $drain = make_building(
     id => 2, name => 'Ore Storage Tanks', level => 5, energy_hour => 10,
@@ -362,6 +454,11 @@ subtest 'cmd_wait' => sub {
   reset_state(queue => ["wait 2099-01-01\n"]);
   is(cmd_wait(0, '2099-01-01', { quiet => 1 }), 'stop', 'quiet future wait stops the run');
   is($queue[0], "wait 2099-01-01\n", 'quiet wait leaves the queue line alone');
+
+  # unparseable date behaves as expired: marked then removed
+  reset_state(queue => ["wait flobschnizzle\n", "build Capitol\n"]);
+  is(cmd_wait(0, 'flobschnizzle', { quiet => 0 }), 'advance', 'unparseable date treated as expired');
+  is_deeply(\@queue, ["build Capitol\n"], 'garbage wait removed after marking');
   done_testing();
 };
 
@@ -402,6 +499,15 @@ subtest 'cmd_demolish' => sub {
   @queue = ("demolish -1 -2 Mine\n");
   cmd_demolish(0, '-1 -2 Mine', { quiet => 1 });
   is(($client->calls_for('building_demolish'))[0]->[2], 9, 'coordinate filter picks the matching mine');
+
+  # zero coordinates are treated as no filter at all
+  my $far = make_building(id => 50, name => 'Mine', level => 3, x => 5, y => 5, url => '/mineA');
+  my $near = make_building(id => 51, name => 'Mine', level => 7, x => 6, y => 6, url => '/mineB');
+  $buildings = { buildings => { 50 => $far, 51 => $near } };
+  $client = FakeClient->new();
+  @queue = ("demolish 0 0 Mine\n");
+  cmd_demolish(0, '0 0 Mine', { quiet => 1 });
+  is(($client->calls_for('building_demolish'))[0]->[2], 50, 'zero coordinates leave the level sort to pick');
   done_testing();
 };
 
@@ -462,6 +568,36 @@ subtest 'cmd_build' => sub {
   my $out = capture { cmd_build(0, 'Capitol', { quiet => 0 }) };
   like($out, qr/Couldn't build Capitol: 1010/, 'RPC failure reported');
   is_deeply(\@queue, ["build Capitol\n"], 'failed build command retained');
+
+  # unknown building name reports instead of crashing the run
+  $buildable = { buildable => {} };
+  @builds = ();
+  @queue = ("build Flurb Factory\n");
+  my $sig = cmd_build(0, 'Flurb Factory', { quiet => 0 });
+  is($sig, 'advance', 'unknown building advances');
+  is($queue[0], "-build Flurb Factory\n", 'unknown build marked quiet');
+  is(scalar $client->calls_for('body_build'), 1, 'no build RPC for an unknown name');
+
+  # buildable is fetched once and cached across commands
+  $buildable = undef;
+  $client = FakeClient->new(responses => {
+    body_buildable => { buildable => { 'Capitol' => { build => { can => 1 } } } },
+    body_build => { building => { pending_build => { end => '01 01 2099 00:00:00 +0000' } } },
+  });
+  for (1, 2) {
+    @builds = ();
+    @queue = ("build Capitol\n");
+    cmd_build(0, 'Capitol', { quiet => 1 });
+  }
+  is(scalar $client->calls_for('body_buildable'), 1, 'buildable fetched once and cached');
+
+  # coordinate variant passes x and y through to the RPC
+  $buildable = { buildable => { 'Park' => { build => { can => 1 } } } };
+  @builds = ();
+  @queue = ("build 3 4 Park\n");
+  cmd_build(0, '3 4 Park', { quiet => 1 });
+  my @xy = $client->calls_for('body_build');
+  is_deeply($xy[-1], ['body_build', 'testbody42', 'Park', 3, 4], 'coordinates parsed and passed');
   done_testing();
 };
 
@@ -535,6 +671,22 @@ subtest 'cmd_upgrade' => sub {
   @queue = ("upgrade <5 Tyleon\n");
   cmd_upgrade(0, '<', 5, 'Tyleon', { quiet => 0 });
   is_deeply(\@queue, ["upgrade <5 Tyleon\n"], 'upTo Tyleon alias with no match leaves the queue alone');
+
+  # falsy level matches any building below 30
+  $buildings = { buildings => { 7 => $mine } };
+  $client = stats_client(status => default_status(), stats => { 7 => { upgrade => $mine->{upgrade} } });
+  @builds = ();
+  @queue = ("upgrade 0 Mine\n");
+  cmd_upgrade(0, '', 0, 'Mine', { quiet => 1 });
+  my @zc = $client->calls_for('building_upgrade');
+  ok(@zc && $zc[-1]->[2] == 7, 'falsy level matches the only mine');
+
+  # Tyleon alias with no Tyleon buildings silently no-ops
+  $buildings = { buildings => { 7 => $mine } };
+  @builds = ();
+  @queue = ("upgrade 5 Tyleon\n");
+  is(cmd_upgrade(0, '', 5, 'Tyleon', { quiet => 1 }), 'advance', 'missing Tyleon buildings no-op');
+  is_deeply(\@queue, ["upgrade 5 Tyleon\n"], 'queue untouched without Tyleon buildings');
   done_testing();
 };
 
@@ -576,6 +728,53 @@ subtest 'cmd_require' => sub {
   is(cmd_require(0, '3x', 5, 'Mine', { quiet => 0 }), 'advance', 'upgrade path advances');
   my @c = $client->calls_for('building_upgrade');
   is_deeply($c[-1], ['building_upgrade', '/mine5', 3], 'lowest mine below target upgraded');
+
+  # unknown building name reports instead of crashing the run
+  $buildable = { buildable => {} };
+  @builds = ();
+  @queue = ("require 2x 5 Flurb Factory\n");
+  is(cmd_require(0, '2x', 5, 'Flurb Factory', { quiet => 0 }), 'advance', 'unknown require target advances');
+  is($queue[0], "-require 2x 5 Flurb Factory\n", 'unknown require target marked');
+  is(scalar $client->calls_for('body_build'), 0, 'no build RPC for an unknown require target');
+
+  # known but unbuildable: the build path is denied and the command marked
+  $buildable = { buildable => { 'Mine' => { build => { can => 0, reason => ['x', 'Needs a body.'] } } } };
+  @builds = ();
+  @queue = ("require 5x 5 Mine\n");
+  is(cmd_require(0, '5x', 5, 'Mine', { quiet => 0 }), 'advance', 'denied require build advances');
+  is($queue[0], "-require 5x 5 Mine\n", 'denied require build marked');
+  is(scalar $client->calls_for('body_build'), 0, 'no build RPC when the require build is denied');
+
+  # more buildings than the count: the lowest of the top count is the target
+  my @five = map {
+    make_building(id => 40 + $_, name => 'Mine', level => 9 - $_, url => '/mine' . (9 - $_),
+      upgrade => { cost => modest_cost(), production => {} })
+  } (0 .. 4);
+  $buildings = { buildings => { map { $_->{id} => $_ } @five } };
+  $buildable = { buildable => { 'Mine' => { build => { can => 1 } } } };
+  @builds = ();
+  $client = stats_client(status => default_status(),
+                         stats => { map { $_->{id} => { upgrade => $_->{upgrade} } } @five });
+  @queue = ("require 3x 8 Mine\n");
+  is(cmd_require(0, '3x', 8, 'Mine', { quiet => 0 }), 'advance', 'truncated require advances');
+  my @tc = $client->calls_for('building_upgrade');
+  is($tc[-1]->[2], 42, 'lowest of the top three mines upgraded');
+
+  # upgrade target denied: command marked, no upgrade
+  $buildings = { buildings => { map { $_->{id} => $_ } @mines } };
+  $mines[2]{level} = 3;
+  @builds = ();
+  $client = FakeClient->new(responses => {
+    body_status => sub { default_status() },
+    building_stats_for_level => sub {
+      { building => { upgrade => { cost => modest_cost(), production => {} } } }
+    },
+    building_view_cached => { building => { upgrade => { can => 0, reason => ['c', 'It forms naturally.'] } } },
+  });
+  @queue = ("require 3x 5 Mine\n");
+  is(cmd_require(0, '3x', 5, 'Mine', { quiet => 0 }), 'advance', 'denied require upgrade advances');
+  is($queue[0], "-require 3x 5 Mine\n", 'denied require upgrade marked');
+  is(scalar $client->calls_for('building_upgrade'), 0, 'no upgrade RPC for a denied require');
   done_testing();
 };
 
@@ -625,6 +824,30 @@ subtest 'cmd_subsidize' => sub {
   @builds = ({ pending_build => { end => end_after(3700) } });
   cmd_subsidize('62m', undef, {});
   is(scalar $client->calls_for('body_subsidize'), 2, '62 minute gate holds a one hour build back');
+
+  # days unit parsing via the gates
+  @builds = ({ pending_build => { end => end_after(3 * 86400 + 3600) } });
+  cmd_subsidize('3d', undef, {});
+  is(scalar $client->calls_for('body_subsidize'), 3, 'three day gate lets a three day build through');
+
+  @builds = ({ pending_build => { end => end_after(3 * 86400 + 3600) } });
+  cmd_subsidize('4d', undef, {});
+  is(scalar $client->calls_for('body_subsidize'), 3, 'four day gate holds a three day build back');
+
+  # multiple pending builds: the longest governs
+  @builds = ({ pending_build => { end => end_after(600) } },
+             { pending_build => { end => end_after(3700) } });
+  cmd_subsidize('30m', undef, {});
+  is(scalar $client->calls_for('body_subsidize'), 4, 'longest pending build governs the subsidy');
+
+  # a failing subsidize RPC is swallowed, the pending build survives
+  $client = FakeClient->new(responses => {
+    empire_status => { essentia => 3000 },
+    body_subsidize => sub { die "boom\n" },
+  });
+  @builds = ({ pending_build => { end => end_after(3700) } });
+  is(cmd_subsidize('30m', undef, {}), 'advance', 'failing subsidy advances');
+  is(scalar @builds, 1, 'pending builds survive a failed subsidy');
   done_testing();
 };
 
@@ -661,6 +884,36 @@ subtest 'cmd_sacrifice' => sub {
   @builds = ();
   @queue = ("sacrifice 5 Nonexistent\n");
   is(cmd_sacrifice(0, '', 5, 'Nonexistent', { quiet => 0 }), 'advance', 'no target advances silently');
+
+  # falsy level matches any building below 30
+  $buildings = { buildings => { 7 => $mine, 8 => $halls1, 9 => $halls2, 10 => $halls3 } };
+  $client = FakeClient->new(responses => {
+    body_plans => { plans => [ { name => 'Halls of Vrbansk', quantity => 5 } ] },
+    building_upgrade => { building => { pending_build => { end => '01 01 2099 00:00:00 +0000' } } },
+  });
+  @builds = ();
+  @queue = ("sacrifice 0 Mine\n");
+  is(cmd_sacrifice(0, '', 0, 'Mine', { quiet => 0 }), 'reprocess', 'falsy level matches any level target');
+
+  # upTo variant matches levels below the marker
+  @builds = ();
+  @queue = ("sacrifice <7 Mine\n");
+  is(cmd_sacrifice(0, '<', 7, 'Mine', { quiet => 0 }), 'reprocess', 'upTo sacrifice matches lower levels');
+
+  # retained sacrifice command stays in the queue
+  @builds = ();
+  @queue = ("*sacrifice 5 Mine\n");
+  is(cmd_sacrifice(0, '', 5, 'Mine', { quiet => 0, retain => 1 }), 'reprocess', 'retained sacrifice reprocesses');
+  is_deeply(\@queue, ["*sacrifice 5 Mine\n"], 'retained sacrifice kept in the queue');
+
+  # body_plans failure counts buildings only
+  $client = FakeClient->new(responses => {
+    body_plans => sub { die "boom\n" },
+  });
+  @builds = ();
+  @queue = ("sacrifice 5 Mine\n");
+  is(cmd_sacrifice(0, '', 5, 'Mine', { quiet => 0 }), 'advance', 'plans failure counts buildings only');
+  is($queue[0], "-sacrifice 5 Mine\n", 'halls from buildings alone marked insufficient');
   done_testing();
 };
 
@@ -704,6 +957,26 @@ subtest 'cmd_shipbuild' => sub {
   @queue = ("+shipbuild probe\n");
   is(cmd_shipbuild(0, 'probe', { quiet => 0, requeue => 1 }), 'reprocess', 'successful ship build reprocesses');
   is_deeply(\@queue, ["+shipbuild probe\n"], 'requeued ship build appended');
+
+  # rebuild variant requeues at the front
+  $client = FakeClient->new(responses => {
+    yard_queue => { ships_building => [] },
+    yard_buildable => { buildable => { probe => { can => 1 } } },
+    yard_build => { ships_building => [ { date_completed => '01 01 2099 00:00:00 +0000' } ] },
+  });
+  @queue = ("++shipbuild probe\n");
+  is(cmd_shipbuild(0, 'probe', { quiet => 0, rebuild => 1, priority => '' }), 'reprocess', 'rebuild ship reprocesses');
+  is_deeply(\@queue, ["++shipbuild probe\n"], 'rebuild requeues the ship build at the front');
+
+  # a failing yard build is swallowed silently, the command survives
+  $client = FakeClient->new(responses => {
+    yard_queue => { ships_building => [] },
+    yard_buildable => { buildable => { probe => { can => 1 } } },
+    yard_build => sub { die "boom\n" },
+  });
+  @queue = ("shipbuild probe\n");
+  is(cmd_shipbuild(0, 'probe', { quiet => 0 }), 'advance', 'failing yard build advances');
+  is($queue[0], "shipbuild probe\n", 'failing yard build leaves the queue alone');
   done_testing();
 };
 
@@ -829,6 +1102,13 @@ subtest 'apply_food_balance' => sub {
   is($oremine->{payoff}, 0, 'non-food buildings zeroed out');
   is($apple->{payoff_ratio}, 51, 'apple ratio from the rebalanced payoff');
   is($wheat->{payoff_ratio}, 1, 'wheat ratio from the rebalanced payoff');
+
+  # no food producers at all: totals start empty and non-food buildings zero out
+  my $rock = make_building(id => 50, name => 'Ore Mine', level => 5,
+    upgrade => { cost => modest_cost(), production => {} });
+  $rock->{payoff} = 3; $rock->{cost_time} = 1; $rock->{cost_prod} = 0;
+  apply_food_balance([$rock], {}, undef);
+  is($rock->{payoff}, 0, 'non-food building zeroed when no food producers exist');
   done_testing();
 };
 
@@ -1127,6 +1407,128 @@ subtest 'cmd_resources' => sub {
     is($queue[0], "-resources 0x Geo Energy Plant\n", 'fully pruned ranking marks the command');
     done_testing();
   };
+
+  subtest 'storage paths mark the command when denied' => sub {
+    my $status = default_status();
+    $status->{energy_stored} = 2000;
+    my $low = make_building(id => 21, name => 'Ore Storage Tanks', level => 2, url => '/orestorage2',
+      upgrade => { cost => modest_cost(), production => {} });
+    my $high = make_building(id => 22, name => 'Ore Storage Tanks', level => 5, url => '/orestorage5',
+      upgrade => { cost => modest_cost(), production => {} });
+    reset_state(queue => ["resources\n"]);
+    $buildings = { buildings => { 21 => $low, 22 => $high } };
+    $client = denied_client(status => $status,
+                            stats => { 21 => { upgrade => $low->{upgrade} },
+                                       22 => { upgrade => $high->{upgrade} } });
+    capture { cmd_resources(0, '', { quiet => 0 }) };
+    is(scalar $client->calls_for('building_upgrade'), 0, 'denied equalize makes no upgrade');
+    is($queue[0], "-resources\n", 'denied equalize marks the command');
+
+    my $near = default_status();
+    $near->{ore_stored} = 19800;
+    $near->{water_stored} = 19600;
+    $near->{energy_stored} = 19400;
+    my @stores = (
+      make_building(id => 21, name => 'Ore Storage Tanks', level => 4, url => '/orestorage',
+        upgrade => { cost => modest_cost(), production => {} }),
+      make_building(id => 22, name => 'Water Storage Tank', level => 4, url => '/waterstorage',
+        upgrade => { cost => modest_cost(), production => {} }),
+      make_building(id => 23, name => 'Energy Reserve', level => 4, url => '/energyreserve',
+        upgrade => { cost => modest_cost(energy => 100), production => { energy_hour => 2 } }),
+      make_building(id => 24, name => 'Food Reserve', level => 4, url => '/foodreserve',
+        upgrade => { cost => modest_cost(), production => {} }),
+    );
+    reset_state(queue => ["resources\n"]);
+    $buildings = { buildings => { map { $_->{id} => $_ } @stores } };
+    $client = denied_client(status => $near,
+                            stats => { map { $_->{id} => { upgrade => $_->{upgrade} } } @stores });
+    capture { cmd_resources(0, '', { quiet => 0 }) };
+    is(scalar $client->calls_for('building_upgrade'), 0, 'denied near limit makes no upgrade');
+    is($queue[0], "-resources\n", 'denied near limit marks the command');
+    done_testing();
+  };
+
+  subtest 'sleepy echoes report quiet runs' => sub {
+    my $status = default_status();
+    $status->{energy_stored} = 2000;
+    my $low = make_building(id => 21, name => 'Ore Storage Tanks', level => 2, url => '/orestorage2',
+      upgrade => { cost => modest_cost(), production => {} });
+    my $high = make_building(id => 22, name => 'Ore Storage Tanks', level => 5, url => '/orestorage5',
+      upgrade => { cost => modest_cost(), production => {} });
+    reset_state(queue => ["-*resources\n"]);
+    $buildings = { buildings => { 21 => $low, 22 => $high } };
+    $client = stats_client(status => $status,
+                           stats => { 21 => { upgrade => $low->{upgrade} },
+                                      22 => { upgrade => $high->{upgrade} } });
+    $sleepy = 7;
+    my $out = capture { cmd_resources(0, '', { quiet => 1 }) };
+    my $equalize_echo = () = $out =~ /Equalizing storage levels/g;
+    is($equalize_echo, 1, 'equalize echoed once through the sleepy branch');
+
+    my $near = default_status();
+    $near->{ore_stored} = 19800;
+    $near->{water_stored} = 19600;
+    $near->{energy_stored} = 19400;
+    my @stores = (
+      make_building(id => 21, name => 'Ore Storage Tanks', level => 4, url => '/orestorage',
+        upgrade => { cost => modest_cost(), production => {} }),
+      make_building(id => 22, name => 'Water Storage Tank', level => 4, url => '/waterstorage',
+        upgrade => { cost => modest_cost(), production => {} }),
+      make_building(id => 23, name => 'Energy Reserve', level => 4, url => '/energyreserve',
+        upgrade => { cost => modest_cost(energy => 100), production => { energy_hour => 2 } }),
+      make_building(id => 24, name => 'Food Reserve', level => 4, url => '/foodreserve',
+        upgrade => { cost => modest_cost(), production => {} }),
+    );
+    reset_state(queue => ["-*resources\n"]);
+    $buildings = { buildings => { map { $_->{id} => $_ } @stores } };
+    $client = stats_client(status => $near,
+                           stats => { map { $_->{id} => { upgrade => $_->{upgrade} } } @stores });
+    $sleepy = 7;
+    $out = capture { cmd_resources(0, '', { quiet => 1 }) };
+    my $near_echo = () = $out =~ /Near storage limit for energy/g;
+    is($near_echo, 1, 'near limit echoed once through the sleepy branch');
+
+    reset_state(queue => ["-*resources\n"]);
+    $buildings = { buildings => { 1 => { %$gep } } };
+    $client = stats_client(status => default_status(), stats => { 1 => { upgrade => $gep->{upgrade} } });
+    $sleepy = 7;
+    $out = capture { cmd_resources(0, '', { quiet => 1 }) };
+    my $want = () = $out =~ /Want to upgrade energy production/g;
+    is($want, 1, 'production want echoed once through the sleepy branch');
+    my $table = () = $out =~ /payoff ratio:\s+2\.50/g;
+    is($table, 1, 'only the sleepy echo table prints');
+    $sleepy = 0;
+    done_testing();
+  };
+
+  subtest 'ignored resource shifts the near limit pick' => sub {
+    my $status = default_status();
+    $status->{ore_stored} = 19800;
+    $status->{water_stored} = 19600;
+    $status->{energy_stored} = 19400;
+    my @stores = (
+      make_building(id => 21, name => 'Ore Storage Tanks', level => 4, url => '/orestorage',
+        upgrade => { cost => modest_cost(), production => {} }),
+      make_building(id => 22, name => 'Water Storage Tank', level => 4, url => '/waterstorage',
+        upgrade => { cost => modest_cost(), production => {} }),
+      make_building(id => 23, name => 'Energy Reserve', level => 4, url => '/energyreserve',
+        upgrade => { cost => modest_cost(energy => 100), production => { energy_hour => 2 } }),
+      make_building(id => 24, name => 'Food Reserve', level => 4, url => '/foodreserve',
+        upgrade => { cost => modest_cost(), production => {} }),
+    );
+    my $wheat = make_building(id => 11, name => 'Wheat Farm', level => 5, food_hour => 50,
+      upgrade => { cost => modest_cost(energy => 0), production => { food_hour => 52 } });
+    reset_state(queue => ["resources ignore ore\n"]);
+    $buildings = { buildings => { (map { $_->{id} => $_ } @stores), 11 => $wheat } };
+    $client = stats_client(status => $status,
+                           stats => { (map { $_->{id} => { upgrade => $_->{upgrade} } } @stores),
+                                      11 => { upgrade => $wheat->{upgrade} } });
+    capture { cmd_resources(0, ' ignore ore', { quiet => 0 }) };
+    my @c = $client->calls_for('building_upgrade');
+    is(scalar @c, 1, 'no near limit fires for the ignored resource');
+    is($c[0]->[2], 11, 'food producer wins instead of any storage');
+    done_testing();
+  };
   done_testing();
 };
 
@@ -1191,6 +1593,102 @@ subtest 'run_queue' => sub {
     is(scalar $client->calls_for('body_build'), 0, 'later commands never dispatched');
     done_testing();
   };
+
+  subtest 'unrecognized and failed commands' => sub {
+    reset_state(queue => ["frobnicate the wibble\n", "wait 2099-01-01\n"]);
+    $client = FakeClient->new();
+    capture { run_queue() };
+    is($queue[0], "frobnicate the wibble\n", 'unrecognized line left untouched');
+    is($queue[1], "-wait 2099-01-01\n", 'run still stops at the later wait');
+
+    reset_state(queue => ["!upgrade 5 Mine\n", "build Capitol\n"]);
+    my $mine = make_building(id => 7, name => 'Mine', level => 5, url => '/mine',
+      upgrade => { cost => modest_cost(), production => {} });
+    $buildings = { buildings => { 7 => $mine } };
+    $buildable = { buildable => { 'Capitol' => { build => { can => 1 } } } };
+    $client = FakeClient->new(responses => {
+      body_status => sub { default_status() },
+      building_stats_for_level => sub {
+        { building => { upgrade => { cost => modest_cost(), production => {} } } }
+      },
+      building_view_cached => { building => { upgrade => { can => 0, reason => ['c', 'It forms naturally.'] } } },
+      body_build => { building => { pending_build => { end => '01 01 2099 00:00:00 +0000' } } },
+    });
+    capture { run_queue() };
+    is_deeply(\@queue, ["-!upgrade 5 Mine\n", "build Capitol\n"], 'failed abort command marked');
+    is(scalar $client->calls_for('body_build'), 0, 'commands after a failed abort command still skipped');
+
+    reset_state(queue => ["wait 2099-01-01\n"]);
+    $debug = 1;
+    my $out = capture { run_queue() };
+    like($out, qr/Inspecting wait 2099-01-01/, 'debug prints the inspected command');
+    $debug = 0;
+    done_testing();
+  };
+  done_testing();
+};
+
+# --- run ------------------------------------------------------------------------
+
+subtest 'run' => sub {
+  my $fake;
+  no warnings 'redefine';
+  local *Client::new = sub {
+    my ($class, %args) = @_;
+    $fake = FakeClient->new(responses => {
+      empire_status => { planets => { 1 => 'Noseeum Prime', 2 => 'Overlook' }, home_planet_id => 2 },
+      body_status => { name => 'Noseeum Prime' },
+      body_buildings => { buildings => {} },
+    });
+    return $fake;
+  };
+
+  my ($fh, $qfile) = tempfile();
+  print $fh "wait 2099-01-01\n";
+  close $fh;
+
+  reset_state();
+  local @ARGV = ('--body=Overlook', "--queue=$qfile");
+  run();
+  is($body_id, 2, 'body matched by name');
+  is(scalar @queue, 1, 'queue file read');
+  is($queue[0], "-wait 2099-01-01\n", 'run processed the queue through run_queue');
+
+  reset_state();
+  $queue_name = undef;
+  $body_name = undef;
+  local @ARGV = ();
+  my $died = '';
+  eval { run(); 1 } or $died = $@;
+  like($died, qr/Couldn't read queue file Noseeum_Prime\.queue/, 'queue name defaults from the body name');
+  is(scalar $fake->calls_for('empire_status'), 1, 'home planet resolution used the empire status');
+
+  reset_state();
+  $body_id = undef;
+  local @ARGV = ('--body=NoMatch');
+  $died = '';
+  eval { run(); 1 } or $died = $@;
+  like($died, qr/No matching planet for name NoMatch/, 'unmatched body name dies');
+
+  reset_state();
+  unlink $qfile;
+  open($fh, '>', $qfile) or die "Can't truncate queue file: $!";
+  close $fh;
+  local @ARGV = ('--body=Overlook', "--queue=$qfile");
+  run();
+  is(scalar @queue, 0, 'empty queue file processed cleanly');
+  done_testing();
+};
+
+# --- populate_building_with_production ---------------------------------------------
+
+subtest 'populate_building_with_production' => sub {
+  my $ghost = { id => 42, name => 'Ghost', level => 1, food_hour => 5 };
+  my $copy;
+  my $out = capture { $copy = populate_building_with_production($ghost) };
+  like($out, qr/No url for building 42/, 'missing url notice printed');
+  is($copy->{food_hour}, 5, 'building returned unmerged');
+  ok(!exists $copy->{upgrade}, 'no stats merged without a url');
   done_testing();
 };
 

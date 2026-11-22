@@ -219,7 +219,7 @@ sub cmd_build {
   $buildable ||= $client->body_buildable($body_id);
   my $reqs = $buildable->{buildable}{$name};
   unless ($reqs && ($reqs->{build}{can} || $reqs->{build}{reason}[1] =~ /Lost City of Tyleon/)) {
-    emit("Cannot build $name: $reqs->{build}{reason}[1]") unless $flags->{quiet} && $sleepy;
+    emit("Cannot build $name: ".($reqs ? $reqs->{build}{reason}[1] : "not a known building")) unless $flags->{quiet} && $sleepy;
     if (!$flags->{quiet}) {
       splice(@queue, $j, 1, "-$queue[$j]");
       write_queue();
@@ -327,7 +327,7 @@ sub cmd_require {
     $buildable ||= $client->body_buildable($body_id);
     my $reqs = $buildable->{buildable}{$name};
     unless ($reqs && ($reqs->{build}{can} || $reqs->{build}{reason}[1] =~ /Lost City of Tyleon/)) {
-      emit("Cannot build $name: $reqs->{build}{reason}[1]") unless $flags->{quiet} && $sleepy;
+      emit("Cannot build $name: ".($reqs ? $reqs->{build}{reason}[1] : "not a known building")) unless $flags->{quiet} && $sleepy;
       if (!$flags->{quiet}) {
         splice(@queue, $j, 1, "-$queue[$j]");
         write_queue();
