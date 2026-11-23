@@ -197,6 +197,50 @@ subtest 'parse_command_flags' => sub {
   ($cmd, $f) = parse_command_flags("wait quietly until 2099\n");
   ok($f->{quiet}, 'wait quietly alias becomes a quiet wait');
   is($cmd, 'wait until 2099', 'wait quietly leaves the until clause');
+
+  # flag order does not matter
+  ($cmd, $f) = parse_command_flags("-!build Capitol\n");
+  is($cmd, 'build Capitol', '-! both stripped');
+  ok($f->{quiet}, '-! sets quiet');
+
+  $abort = undef;
+  ($cmd, $f) = parse_command_flags("!-build -4 1 Water Reclamation Facility\n");
+  is($cmd, 'build -4 1 Water Reclamation Facility', '!- both stripped');
+  ok($f->{quiet}, '!- sets quiet');
+  ok($abort, '!- sets abort');
+  is($f->{priority}, '!', '!- carries priority');
+
+  $abort = undef;
+  ($cmd, $f) = parse_command_flags("++!build Capitol\n");
+  is($cmd, 'build Capitol', '++! all stripped');
+  ok($f->{rebuild} && !$f->{requeue} && $abort, '++! sets rebuild and abort');
+
+  $abort = undef;
+  ($cmd, $f) = parse_command_flags("!++build Capitol\n");
+  is($cmd, 'build Capitol', '!++ all stripped');
+  ok($f->{rebuild} && !$f->{requeue} && $abort, '!++ sets rebuild and abort');
+
+  ($cmd, $f) = parse_command_flags("*+build Capitol\n");
+  is($cmd, 'build Capitol', '*+ all stripped');
+  ok($f->{retain} && $f->{requeue} && !$f->{rebuild}, '*+ sets retain and requeue');
+
+  ($cmd, $f) = parse_command_flags("+*build Capitol\n");
+  is($cmd, 'build Capitol', '+* all stripped');
+  ok($f->{retain} && $f->{requeue} && !$f->{rebuild}, '+* sets retain and requeue');
+
+  ($cmd, $f) = parse_command_flags("--build Capitol\n");
+  is($cmd, 'build Capitol', 'repeated dashes stripped');
+  ok($f->{quiet}, 'repeated dashes set quiet once');
+
+  $abort = undef;
+  ($cmd, $f) = parse_command_flags("!-!build Capitol\n");
+  is($cmd, 'build Capitol', 'repeated flags stripped');
+  ok($f->{quiet} && $abort, 'repeated flags set quiet and abort');
+
+  # a prefixed wait quietly no longer double-dashes into a dead line
+  ($cmd, $f) = parse_command_flags("-wait quietly until 2099\n");
+  ok($f->{quiet}, 'prefixed wait quietly stays a quiet wait');
+  is($cmd, 'wait until 2099', 'prefixed wait quietly parses');
   done_testing();
 };
 
@@ -1623,6 +1667,30 @@ subtest 'run_queue' => sub {
     my $out = capture { run_queue() };
     like($out, qr/Inspecting wait 2099-01-01/, 'debug prints the inspected command');
     $debug = 0;
+    done_testing();
+  };
+
+  subtest 'flag order does not matter end to end' => sub {
+    reset_state(queue => ["!-build -4 1 Water Reclamation Facility\n", "build Capitol\n"]);
+    $buildable = { buildable => { 'Water Reclamation Facility' => { build => { can => 1 } } } };
+    $client = FakeClient->new(responses => {
+      body_build => { building => { pending_build => { end => '01 01 2099 00:00:00 +0000' } } },
+    });
+    capture { run_queue() };
+    my @wrf = $client->calls_for('body_build');
+    is_deeply($wrf[0], ['body_build', 'testbody42', 'Water Reclamation Facility', -4, 1],
+              'abort-quiet build dispatches with coordinates');
+    is_deeply(\@queue, ["build Capitol\n"], 'abort stops the rest of the queue after the build');
+    is(scalar $client->calls_for('body_build'), 1, 'no second build in the same run');
+
+    reset_state(queue => ["!-build -4 1 Water Reclamation Facility\n", "build Capitol\n"]);
+    $buildable = { buildable => { 'Water Reclamation Facility' =>
+      { build => { can => 0, reason => ['x', 'You do not have a sufficient supply (9) of mineral agents.'] } } } };
+    $client = FakeClient->new();
+    capture { run_queue() };
+    is_deeply(\@queue, ["!-build -4 1 Water Reclamation Facility\n", "build Capitol\n"],
+              'quiet denial leaves the line alone');
+    is(scalar $client->calls_for('body_build'), 0, 'no build RPC when the server denies');
     done_testing();
   };
   done_testing();

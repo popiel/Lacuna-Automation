@@ -116,17 +116,21 @@ sub run {
 
 # Strip the per-command prefix flags (- quiet, ! abort, ++ rebuild, + requeue,
 # * retain) off a raw queue line and translate the "wait quietly" alias.
+# The flags may appear in any order, and repeats are tolerated.
 sub parse_command_flags {
   my $line = shift;
   chomp(my $command = $line);
   $command =~ s/wait quietly/-wait/;
   my %flags;
-  $flags{quiet}   = 1 if $command =~ s/^\-//;
-  $abort          = 1 if $command =~ s/^\!//;
+  while (1) {
+    if    ($command =~ s/^\+\+//) { $flags{rebuild} = 1; }
+    elsif ($command =~ s/^\+//)   { $flags{requeue} = 1; }
+    elsif ($command =~ s/^\-//)   { $flags{quiet}   = 1; }
+    elsif ($command =~ s/^\!//)   { $abort          = 1; }
+    elsif ($command =~ s/^\*//)   { $flags{retain}  = 1; }
+    else { last }
+  }
   $flags{priority} = ($abort) ? '!' : '';
-  $flags{rebuild} = 1 if $command =~ s/^\+\+//;
-  $flags{requeue} = 1 if $command =~ s/^\+//;
-  $flags{retain}  = 1 if $command =~ s/^\*//;
   return ($command, \%flags);
 }
 
