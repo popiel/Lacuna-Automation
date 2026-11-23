@@ -34,8 +34,8 @@ REM This machine is PST (UTC-8), so midnight GMT = 16:00 local; 10 min before = 
 REM Adjust HHN if the system timezone changes.
 if %HHN% EQU 15 (
   if %MMN% GEQ 50 (
-    echo ======== star_scan started %date% %time% >> "logs\star_scan.log"
-    C:\Strawberry\perl\bin\perl.exe star_scan.pl --db stars.db >> "logs\star_scan.log" 2>&1
+    REM echo ======== star_scan started %date% %time% >> "logs\star_scan.log"
+    REM C:\Strawberry\perl\bin\perl.exe star_scan.pl --db stars.db >> "logs\star_scan.log" 2>&1
   )
 )
 
