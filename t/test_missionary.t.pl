@@ -216,4 +216,131 @@ subtest 'infer_status_hint' => sub {
   is($retired[0]{status_hint}, 'title_completed_by_us_recently', 'completed twin hints supersession');
 };
 
+subtest 'union_needed' => sub {
+  plan tests => 7;
+  my $a = parse_items(['10,000 essentia.', '5,000 gold', '1 anthracite glyph']);
+  my $b = parse_items(['100 essentia.', '2 gold', '2 gold glyphs']);
+  my $c = parse_items(['50,000,000 happiness.']);
+  my $needed = union_needed($a, $b, $c);
+  is($needed->{essentia}, 10000, 'essentia unions at the max');
+  is($needed->{happiness}, 50000000, 'happiness unions at the max');
+  is($needed->{resources}{gold}, 5002, 'resources sum');
+  is($needed->{glyphs}{anthracite}, 1, 'glyph types union');
+  is($needed->{glyphs}{gold}, 2, 'glyph types union again');
+  is(scalar @{$needed->{ships}}, 0, 'no ships');
+  is(scalar @{$needed->{plans}}, 0, 'no plans');
+};
+
+subtest 'classify_rewards' => sub {
+  plan tests => 10;
+  my $needed = union_needed(
+    parse_items(['5,000 gold', '2,000 cheese', '1 gypsum glyph',
+                 '    8 Scow (speed >= 1, stealth >= 0, hold size >= 100, combat >= 0, berth >= 1)',
+                 '2 Halls of Vrbansk (>= 1) plans']),
+    parse_items(['100 essentia.']),
+  );
+  my ($class, $letter, $reason);
+
+  ($class, $letter, $reason) = classify_rewards(parse_items(['1 Lost City of Tyleon (D) level 1 plan']), $needed);
+  is($class, 'lcot', 'LCOT reward classifies lcot');
+  is($letter, 'D', 'LCOT letter extracted');
+  is($reason, 'LCOT plan D', 'LCOT reason');
+
+  ($class, $reason) = classify_rewards(parse_items(['1,000 gold']), $needed);
+  is($class, 'useful', 'needed resource is useful');
+
+  ($class, $reason) = classify_rewards(parse_items(['3,000 lapis']), $needed);
+  is($class, 'useless', 'unneeded resource is useless');
+
+  ($class, $reason) = classify_rewards(
+    parse_items(['    1 Scow (speed: 10, stealth: 0, hold size: 100, combat: 0, berth: 1)']), $needed);
+  is($class, 'useful', 'ship meeting a needed minimum is useful');
+
+  ($class, $reason) = classify_rewards(
+    parse_items(['    1 Scow (speed: 10, stealth: 0, hold size: 50, combat: 0, berth: 1)']), $needed);
+  is($class, 'useless', 'ship below a needed hold minimum is useless');
+
+  ($class, $reason) = classify_rewards(parse_items(['1 Halls of Vrbansk level 1 plan']), $needed);
+  is($class, 'useful', 'plan matching a needed class is useful');
+
+  ($class, $reason) = classify_rewards(parse_items(['1 Halls of Vrbansk level 1+1 plan']), $needed);
+  is($class, 'useful', 'plan exceeding a needed level is useful');
+
+  ($class, $reason) = classify_rewards(parse_items(['1 Sand level 5 plan']), $needed);
+  is($class, 'useless', 'unneeded plan class is useless');
+};
+
+subtest 'should_skip' => sub {
+  plan tests => 7;
+  my $needed = union_needed(parse_items(['5,000 gold']));
+  my ($class) = classify_rewards(parse_items(['1 Lost City of Tyleon (A) level 1 plan']), $needed);
+  ok(!should_skip($class, parse_items(['1 Lost City of Tyleon (A) level 1 plan']), parse_items([])),
+     'lcot missions are never skipped');
+
+  my $rewards   = parse_items(['5,000 gold']);
+  my $objectives = parse_items(['1,000 gold']);
+  ($class) = classify_rewards($rewards, $needed);
+  ok(!should_skip($class, $rewards, $objectives), 'useful missions are never skipped');
+
+  $rewards = parse_items(['200 lapis']);
+  ($class) = classify_rewards($rewards, $needed);
+  ok(should_skip($class, $rewards, parse_items(['500 lapis'])),
+     'pure-resource mission returning less than it takes is skipped');
+
+  $rewards = parse_items(['200 lapis']);
+  ($class) = classify_rewards($rewards, $needed);
+  ok(!should_skip($class, $rewards, parse_items(['100 lapis', '1 rutile glyph'])),
+     'glyph rewards are standalone value, not skipped');
+
+  $rewards = parse_items([]);
+  ($class) = classify_rewards($rewards, $needed);
+  ok(should_skip($class, $rewards, parse_items(['100 lapis'])), 'empty rewards are skipped');
+
+  $rewards = parse_items(['2,000 lapis']);
+  ($class) = classify_rewards($rewards, $needed);
+  ok(!should_skip($class, $rewards, parse_items(['1,000 lapis'])),
+     'pure-resource mission that returns more than it takes is kept');
+
+  $rewards = parse_items(['2,000 lapis']);
+  my $objs = parse_items(['5,000 lapis', '100 essentia.']);
+  ($class) = classify_rewards($rewards, $needed);
+  ok(should_skip($class, $rewards, $objs), 'essentia drain with no valuable reward is skipped');
+};
+
+subtest 'holdings, sellable, outstanding' => sub {
+  plan tests => 10;
+  my $plan_lists = {
+    573252 => { plans => [ { plan_type => 'LCOTa', quantity => 2 },
+                           { plan_type => 'HallsOfVrbansk', quantity => 1 } ] },
+    577083 => { plans => [ { plan_type => 'LCOTa', quantity => 3 },
+                           { plan_type => 'lcoti', quantity => 1 } ] },
+    785996 => { plans => [ { plan_type => 'LCOTA', quantity => 6 } ] },
+  };
+  my $holdings = lcot_holdings_from_plans($plan_lists);
+  is($holdings->{A}, 11, 'case-insensitive LCOTa sums across bodies');
+  is($holdings->{I}, 1, 'lowercase plan_type counts');
+  is(scalar keys %$holdings, 2, 'non-LCOT plans ignored');
+
+  add_listed_holdings($holdings, parse_items(['1 Lost City of Tyleon (A) level 1 plan'])->{plans});
+  is($holdings->{A}, 12, 'SST-listed copies count as ours');
+
+  my $sellable = sellable_copies($holdings, { A => 1 }, 6);
+  is($sellable->{A}, 5, 'sellable = holdings - listed - keep');
+  ok(!exists $sellable->{I}, 'letters at or below keep are not sellable');
+
+  $sellable = sellable_copies($holdings, { A => 1 }, 20);
+  is(scalar keys %$sellable, 0, 'nothing sellable when keep exceeds holdings');
+
+  my @outstanding = outstanding_letters($holdings, 9);
+  ok(!grep { $_ eq 'A' } @outstanding, 'letter A at goal is not outstanding');
+  ok(grep { $_ eq 'I' } @outstanding, 'letter I below goal is outstanding');
+  ok(grep { $_ eq 'B' } @outstanding, 'never-seen letters are outstanding');
+};
+
+subtest 'compute_essentia_floor' => sub {
+  plan tests => 2;
+  is(compute_essentia_floor({ essentia => 100 }, 20), 110, 'floor raised above the objective');
+  is(compute_essentia_floor({ essentia => 0 }, 20), 20, 'base floor with no essentia need');
+};
+
 done_testing();

@@ -325,6 +325,133 @@ sub retire_missing_instances {
   return @retired;
 }
 
+sub union_needed {
+  my @parsed = @_;
+  my $needed = {
+    essentia  => 0,
+    happiness => 0,
+    resources => {},
+    glyphs    => {},
+    ships     => [],
+    plans     => [],
+  };
+  for my $items (@parsed) {
+    next unless $items;
+    $needed->{essentia}  = max($needed->{essentia},  $items->{essentia}  || 0);
+    $needed->{happiness} = max($needed->{happiness}, $items->{happiness} || 0);
+    $needed->{resources}{$_} += $items->{resources}{$_} for keys %{$items->{resources} || {}};
+    $needed->{glyphs}{$_}    += $items->{glyphs}{$_}    for keys %{$items->{glyphs}    || {}};
+    push @{$needed->{ships}}, @{$items->{ships} || []};
+    push @{$needed->{plans}}, @{$items->{plans} || []};
+  }
+  return $needed;
+}
+
+sub ship_meets_spec {
+  my ($ship, $spec) = @_;
+  return 0 unless ($ship->{type} || '') eq ($spec->{type} || '');
+  return 0 unless ($ship->{speed}       || 0) >= ($spec->{speed}       || 0);
+  return 0 unless ($ship->{stealth}     || 0) >= ($spec->{stealth}     || 0);
+  return 0 unless ($ship->{hold_size}   || 0) >= ($spec->{hold_size}   || 0);
+  return 0 unless ($ship->{combat}      || 0) >= ($spec->{combat}      || 0);
+  return 0 unless ($ship->{berth_level} || 0) >= ($spec->{berth_level} || 0);
+  return 1;
+}
+
+sub plan_meets_spec {
+  my ($plan, $spec) = @_;
+  return 0 unless ($plan->{class_name} || '') eq ($spec->{class_name} || '');
+  return 0 unless ($plan->{level} || 0) >= ($spec->{level} || 0);
+  return 0 unless ($plan->{extra} || 0) >= ($spec->{extra} || 0);
+  return 1;
+}
+
+sub classify_rewards {
+  my ($rewards, $needed) = @_;
+  for my $plan (@{$rewards->{plans} || []}) {
+    my $letter = lcot_letter($plan->{class_name});
+    return (lcot => $letter, "LCOT plan $letter") if $letter;
+  }
+  return (useful => 'happiness') if $needed->{happiness} && $rewards->{happiness};
+  return (useful => 'essentia')  if $needed->{essentia}  && $rewards->{essentia};
+  for my $resource (keys %{$rewards->{resources} || {}}) {
+    return (useful => "resource $resource") if $needed->{resources}{$resource};
+  }
+  for my $glyph (keys %{$rewards->{glyphs} || {}}) {
+    return (useful => "glyph $glyph") if $needed->{glyphs}{$glyph};
+  }
+  for my $ship (@{$rewards->{ships} || []}) {
+    for my $spec (@{$needed->{ships} || []}) {
+      return (useful => "ship $ship->{type}") if ship_meets_spec($ship, $spec);
+    }
+  }
+  for my $plan (@{$rewards->{plans} || []}) {
+    for my $spec (@{$needed->{plans} || []}) {
+      return (useful => "plan $plan->{class_name}") if plan_meets_spec($plan, $spec);
+    }
+  }
+  return (useless => 'nothing in the needed set');
+}
+
+sub should_skip {
+  my ($class, $rewards, $objectives) = @_;
+  return 0 unless $class eq 'useless';
+  my $valuable = @{$rewards->{plans} || []} || @{$rewards->{ships} || []}
+              || %{$rewards->{glyphs} || {}} || $rewards->{essentia} || $rewards->{happiness};
+  return 0 if $valuable;
+  my $rew_res = sum(values %{$rewards->{resources} || {}});
+  my $obj_res = sum(values %{$objectives->{resources} || {}});
+  return 1 if !$rew_res;
+  return 1 if $rew_res <= $obj_res;
+  return 1 if ($objectives->{essentia} || 0) > ($rewards->{essentia} || 0);
+  return 0;
+}
+
+sub lcot_holdings_from_plans {
+  my ($plan_lists) = @_;
+  my %holdings;
+  for my $key (keys %{$plan_lists || {}}) {
+    my $entry  = $plan_lists->{$key};
+    my $plans  = ref($entry) eq 'ARRAY' ? $entry : ($entry->{plans} || []);
+    for my $plan (@$plans) {
+      next unless ($plan->{plan_type} || '') =~ /^LCOT([a-i])\z/i;
+      $holdings{uc($1)} += ($plan->{quantity} || 0);
+    }
+  }
+  return \%holdings;
+}
+
+sub add_listed_holdings {
+  my ($holdings, $offer_items) = @_;
+  for my $plan (@{$offer_items || []}) {
+    my $letter = lcot_letter($plan->{class_name});
+    next unless $letter;
+    $holdings->{$letter} += ($plan->{quantity} || 0);
+  }
+  return $holdings;
+}
+
+sub sellable_copies {
+  my ($holdings, $listed, $keep) = @_;
+  my %sellable;
+  for my $letter (keys %$holdings) {
+    my $copies = $holdings->{$letter} - ($listed->{$letter} || 0);
+    my $excess = $copies - $keep;
+    $sellable{$letter} = $excess if $excess > 0;
+  }
+  return \%sellable;
+}
+
+sub outstanding_letters {
+  my ($holdings, $goal) = @_;
+  return grep { ($holdings->{$_} || 0) < $goal } 'A' .. 'I';
+}
+
+sub compute_essentia_floor {
+  my ($needed, $base) = @_;
+  return max($base || 20, ($needed->{essentia} || 0) + 10);
+}
+
 sub run {
   parse_args();
   return offline_report() if $noaction >= 2;
