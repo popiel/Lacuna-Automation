@@ -1,0 +1,143 @@
+Missions that yield Tyleon (Lost City of Tyleon, LCOT) plans
+============================================================
+
+Source: ../lacuna_server/mission/missions/*.mission
+Building names: "Lost City of Tyleon (A)" .. "(I)"
+               (Lacuna::DB::Result::Building::LCOTa .. LCOTi)
+
+25 mission files each award exactly one Tyleon plan (level 1, qty 1,
+extra_build_level 0) and nothing else; none have "requires" fields.
+
+Shorthands
+----------
+G20     = 1 each of all 20 glyphs (anthracite, bauxite, beryl, chalcopyrite,
+          chromite, fluorite, galena, goethite, gold, gypsum, halite,
+          kerogen, magnetite, methane, monazite, rutile, sulfur, trona,
+          uraninite, zircon)
+ORES5k  = 5000 each of those same 20 ores
+"uni"   = max_university_level (highest university level at which the
+          mission is still offered)
+
+Plan A (unique)
+----------------
+The Mortal Coil (jandor-trading-the-mortal-coil.mission, uni 30)
+  10 essentia, 50M happiness, G20, 2x supply_pod4 -> inhabited isolationist
+  planets (size 30-75, outside zone), 1 each: bleeder, observatory_seeker,
+  placebo5, scow, security_ministry_seeker, snark3, spaceport_seeker,
+  sweeper.
+
+Plan B (unique)
+----------------
+Strange Delivery (norway_strange_delivery.mission, uni 30)
+  Probes to 1 star of each of 6 colors (outside zone), G20, 25M energy,
+  23 permanent plans (AlgaePond, AmalgusMeadow, BeeldebanNest,
+  CitadelOfKnope, CrashedShipSite, DentonBrambles, GasGiantPlatform,
+  GeoThermalVent, Grove, HallsOfVrbansk x2, InterDimensionalRift,
+  KalavianRuins, Lagoon, LapisForest, LibraryOfJith, MalcudField,
+  NaturalSpring, OracleOfAnid, PantheonOfHagness, Ravine,
+  TempleOfTheDrajilites, TerraformingPlatform, Volcano).
+
+Plan C (unique)
+----------------
+The Tyleon Arboretum (eleven_hands_tyleon_arboretum.mission, uni 30)
+  100 essentia, 13 permanent plans (AlgaePond, BeeldebanNest,
+  GeoThermalVent, Grove, Lagoon, Lake, LapisForest, MalcudField,
+  NaturalSpring, Ravine, RockyOutcrop, Sand, Volcano).
+
+Plan D (4 missions)
+-------------------
+Tyleon Dig part 3 (garloo_mission_3.mission, uni 20)
+  1x cargo_ship + 3x spy_pod -> inhabited non-isolationist planets
+  (size 1-121, in zone), 50k happiness, 20k gold, 3 dories.
+
+Divide The Rainbow (owenferguson_divide-the-rainbow.mission, uni 20)
+  G20.
+
+Survivors of Tyleon / part 1 of 5 (shadow_tyleon.mission, uni 15)
+  15k algae, 5k bread, 25k water, 1 cargo ship.
+
+Battle Plan / part 5 of 5 (shadow_tyleon.part5, uni 20)
+  3x surveyor -> uninhabited non-isolationist planets (size 1-121,
+  in zone), 2 sweepers.
+
+Plan E (4 missions)
+-------------------
+Tyleon Waste Glyph (metaan-tyleon-waste-glyph.mission, uni 20)
+  35k happiness, beryl/gypsum/halite/sulfur/trona/zircon 1k each,
+  50k waste, 1 scow (40k hold).
+
+Multiply The Rainbow (owenferguson_multiply-the-rainbow.mission, uni 20)
+  1 each of Energy::Waste, Waste::Digester, Waste::Treatment,
+  Water::Reclamation plans, 50k waste.
+
+Agricultural Aid / part 3 of 5 (shadow_tyleon.part3, uni 15)
+  40k each apple, lapis, wheat.
+
+Tyleon Mega-Rift Deluxe (zaxon-mega-rift-deluxe.mission, uni 20)
+  1 gypsum glyph, 2 InterDimensionalRift plans, 200k cheese, 500k chromite,
+  500k magnetite, 1 detonator.
+
+Plan F (4 missions)
+-------------------
+Add The Rainbow (owenferguson_add-the-rainbow.mission, uni 20)
+  Plans: BeeldebanNest, GeoThermalVent, HallsOfVrbansk x2, LapisForest,
+  NaturalSpring, Volcano.
+
+Scow Location (saints_scow-location.mission, uni 15)
+  2 scanners, 8 scows.
+
+Spring Cleaning / part 4 of 5 (shadow_tyleon.part4, uni 20)
+  50k gold, 2 excavators, 2 scows (150k hold).
+
+The Va'lox of Tyleon (zaxon-the-va-lox-of-tyleon.mission, uni 20)
+  5x surveyor -> uninhabited non-isolationist planets (size 1-121;
+  2 in zone, 3 out), 1M waste, 1M water.
+
+Plan G (4 missions)
+-------------------
+Tyleon Dig part 1 (garloo_mission_1.mission, uni 10)
+  9x probe -> stars in zone, any color.
+
+Tyleon Water Glyph (metaan-tyleon-water.mission, uni 10)
+  5k algae, 5k fungus, 25k water, 1 dory.
+
+Share The Rainbow (owenferguson_share-the-rainbow.mission, uni 10)
+  200k happiness, 5k each of 22 foods (algae, apple, bean, beetle, bread,
+  burger, cheese, chip, cider, corn, fungus, lapis, meal, milk, pancake,
+  pie, potato, root, shake, soup, syrup, wheat).
+
+That Ancient Jazz (zaxon-that-ancient-jazz.mission, uni 10)
+  50k happiness, bauxite/beryl 5k each, fluorite/goethite/gypsum/magnetite
+  10k each, 1 barge (5k hold), 3 colony ships, 1 dory (2k hold).
+
+Plan H (3 missions)
+-------------------
+Tyleon Dig part 2 (garloo_mission_2.mission, uni 10)
+  Apple 15k, chromite 5k, energy 20k, magnetite 5k, water 20k, wheat 10k,
+  zircon 5k, 1 barge.
+
+Noah's Arms (owenferguson_noahs_arms.mission, uni 10)
+  2 each: barge, dory, drone, probe, scanner, scow,
+  short_range_colony_ship.
+
+Touch The Rainbow (owenferguson_touch-the-rainbow.mission, uni 10)
+  200k happiness, ORES5k, 50k energy.
+
+Plan I (3 missions)
+-------------------
+Tyleon Food Glyph (metaan-tyleon-food-glyph.mission, uni 10)
+  10k happiness; 1500 each algae, apple, bean, beetle, cheese, cider, corn,
+  fungus, lapis, milk, potato, root, syrup, wheat; 1000 fluorite;
+  2000 sulfur; 2000 trona; 10k energy.
+
+See(d) The Rainbow (owenferguson_seed-the-rainbow.mission, uni 10)
+  30 probes (5 of each color) -> stars outside zone, 10k water.
+
+Settlers / part 2 of 5 (shadow_tyleon.part2, uni 10)
+  2x scanner -> uninhabited non-isolationist planets (size 1-121,
+  in zone), 10k each bauxite/gypsum/magnetite, 1 colony ship.
+
+Summary
+-------
+Plans A, B, C are unique to one mission each; plans D-I each come from
+3-4 different missions.
