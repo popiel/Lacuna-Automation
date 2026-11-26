@@ -1,0 +1,363 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+
+use FindBin;
+BEGIN {
+  @INC = (@INC, $FindBin::RealBin, "$FindBin::RealBin/local/lib/perl5");
+}
+
+use Carp;
+use Client;
+use File::Path qw(make_path);
+use File::Spec;
+use Getopt::Long;
+use JSON::XS ();
+use List::Util qw(first max min sum);
+
+autoflush STDOUT 1;
+autoflush STDERR 1;
+
+our $config_name = "config.json";
+our @body_names;
+our $debug    = 0;
+our $noaction = 0;
+our $quiet    = 0;
+our $help     = 0;
+
+our $transmute_cap = 1;
+our $essentia_floor_override;
+our $copies_goal = 9;
+our $copies_keep = 6;
+our $list_at     = 20;
+our $missions_dir = "missions";
+our $lookback_days = 30;
+
+our $client;
+our $empire_name;
+our $essentia_floor = 20;
+
+our %buildings_for;
+our %mc_for;
+our %trade_for;
+our %transporter_for;
+our %ports_for;
+our %yards_for;
+our %body_coords;
+our $sst_body_id;
+
+sub usage {
+  print <<"END";
+Usage: $0 [--body Name] [options]
+  --body   / -b    Colony name (repeatable; default all colonies)
+  --config         Client config file (default config.json)
+  --noaction / -n  Once: simulate mutations, reads still happen.
+                   Twice: fully offline, no RPC at all, report from disk.
+  --debug   / -d   Print debug information (repeatable for more)
+  --quiet          Suppress routine output; errors still print
+  --transmute      Max 1:1 transporter transmutations per run (default 1)
+  --essentia-floor Never transmute below this essentia (default auto)
+  --goal           LCOT plan copies to accumulate per letter (default 9)
+  --keep           LCOT copies retained before selling surplus (default 6)
+  --list-at        SST ask price per surplus plan copy (default 20)
+  --help           Show this help
+END
+}
+
+sub emit {
+  return if $quiet;
+  my $message = shift;
+  my $prefix  = shift // $empire_name // "missionary";
+  print Client::format_time(time()) . " missionary: $prefix: $message\n";
+}
+
+sub emit_debug {
+  return unless $debug;
+  my $message = shift;
+  my $hash    = shift;
+  print Client::format_time(time()) . " $message:\n";
+  if (defined $hash) {
+    print JSON::XS->new->allow_nonref->canonical->pretty->encode($hash), "\n";
+  }
+}
+
+sub parse_args {
+  GetOptions(
+    "config=s"          => \$config_name,
+    "body|b=s"          => \@body_names,
+    "debug+"            => \$debug,
+    "noaction|n+"       => \$noaction,
+    "quiet"             => \$quiet,
+    "help"              => \$help,
+    "transmute=i"       => \$transmute_cap,
+    "essentia-floor=i"  => \$essentia_floor_override,
+    "goal=i"            => \$copies_goal,
+    "keep=i"            => \$copies_keep,
+    "list-at=i"         => \$list_at,
+  ) or die "Try '$0 --help' for usage.\n";
+  usage() and exit 0 if $help;
+  return;
+}
+
+sub sanitize_title {
+  my $title = shift // "";
+  $title =~ s/[^A-Za-z0-9\-.]/_/g;
+  return $title;
+}
+
+sub decommify {
+  my $number = shift;
+  $number =~ s/,//g;
+  return $number + 0;
+}
+
+sub ship_type_from_display {
+  my $display = shift // "";
+  my $type = lc($display);
+  $type =~ s/\s+/_/g;
+  return $type;
+}
+
+sub lcot_letter {
+  my $class = shift // "";
+  return uc($1) if $class =~ /\(([A-I])\)\s*\z/;
+  return uc($1) if $class =~ /^LCOT([a-i])\z/i;
+  return;
+}
+
+sub parse_items {
+  my $lines = shift;
+  my $items = {
+    essentia        => 0,
+    happiness       => 0,
+    resources       => {},
+    glyphs          => {},
+    ships           => [],
+    fleet_movement  => [],
+    plans           => [],
+  };
+  my %moved;
+  for my $line (@{$lines || []}) {
+    next unless defined $line;
+    (my $work = $line) =~ s/^\s+//;
+    $work =~ s/\s+$//;
+    next unless length $work;
+    my ($count, $rest) = $work =~ /^([\d,]+)\s+(.+)$/ or next;
+    $count = decommify($count);
+
+    if ($rest =~ /^essentia\.$/) {
+      $items->{essentia} += $count;
+    }
+    elsif ($rest =~ /^happiness\.$/) {
+      $items->{happiness} += $count;
+    }
+    elsif ($rest =~ /^([a-z_]+) glyphs?$/) {
+      $items->{glyphs}{$1} += $count;
+    }
+    elsif ($rest =~ /^(.+?) \(speed >= ([\d,]+), stealth >= ([\d,]+), hold size >= ([\d,]+), combat >= ([\d,]+), berth >= (\d+)\)$/) {
+      push @{$items->{ships}}, {
+        type        => ship_type_from_display($1),
+        quantity    => $count,
+        speed       => decommify($2),
+        stealth     => decommify($3),
+        hold_size   => decommify($4),
+        combat      => decommify($5),
+        berth_level => $6 + 0,
+      };
+    }
+    elsif ($rest =~ /^(.+?) \(speed: ([\d,]+), stealth: ([\d,]+), hold size: ([\d,]+), combat: ([\d,]+), berth: (\d+)\)$/) {
+      push @{$items->{ships}}, {
+        type        => ship_type_from_display($1),
+        quantity    => $count,
+        speed       => decommify($2),
+        stealth     => decommify($3),
+        hold_size   => decommify($4),
+        combat      => decommify($5),
+        berth_level => $6 + 0,
+      };
+    }
+    elsif ($rest =~ /^Send (.+?) to (.+?) \((-?\d+),(-?\d+)\)\.$/) {
+      my $movement = {
+        ship_type   => ship_type_from_display($1),
+        target_name => $2,
+        x           => $3 + 0,
+        y           => $4 + 0,
+      };
+      my $key = "$movement->{ship_type}\@$movement->{x},$movement->{y}";
+      next if $moved{$key}++;
+      push @{$items->{fleet_movement}}, $movement;
+    }
+    elsif ($rest =~ /^(.+?) \(>= (\d+)(?:\+(\d+))?\) plans?$/) {
+      push @{$items->{plans}}, {
+        class_name => $1,
+        level      => $2 + 0,
+        extra      => ($3 // 0) + 0,
+        quantity   => $count,
+      };
+    }
+    elsif ($rest =~ /^(.+?) level (\d+)(?:\+(\d+))? plans?$/) {
+      push @{$items->{plans}}, {
+        class_name => $1,
+        level      => $2 + 0,
+        extra      => ($3 // 0) + 0,
+        quantity   => $count,
+      };
+    }
+    elsif ($rest =~ /^([a-z_]+)$/) {
+      $items->{resources}{$1} += $count;
+    }
+  }
+  return $items;
+}
+
+sub read_json_file {
+  my $path = shift;
+  return unless -f $path;
+  open(my $fh, '<', $path) or return;
+  local $/;
+  my $blob = <$fh>;
+  close $fh;
+  return unless defined $blob && length $blob;
+  return eval { JSON::XS->new->decode($blob) };
+}
+
+sub write_json_file {
+  my ($path, $data) = @_;
+  my ($vol, $dir, $file) = File::Spec->splitpath($path);
+  make_path($vol ? File::Spec->catpath($vol, $dir, '') : $dir);
+  open(my $fh, '>', $path) or die "Can't write $path: $!\n";
+  print {$fh} JSON::XS->new->allow_nonref->canonical->pretty->encode($data);
+  close $fh;
+}
+
+sub mission_payload_keys { qw(id name description objectives rewards max_university_level date_posted) }
+
+sub record_path {
+  my ($dir, $mission) = @_;
+  return File::Spec->catfile($dir, sanitize_title($mission->{name}), "$mission->{id}.json");
+}
+
+sub now_stamp { Client::format_time(time()) }
+
+sub record_instance {
+  my ($dir, $mission, $body_id, $building_id) = @_;
+  my $path = record_path($dir, $mission);
+  my $old  = read_json_file($path) || {};
+  my $now  = now_stamp();
+  my %payload;
+  $payload{$_} = $mission->{$_} for mission_payload_keys();
+  my $seen = $old->{seen_on} || {};
+  $seen->{$body_id}{$building_id} = $now;
+  my %record = (%$old, %payload);
+  $record{first_seen}       = $old->{first_seen} || $now;
+  $record{first_seen_epoch} = $old->{first_seen_epoch} || time();
+  $record{last_seen}        = $now;
+  $record{seen_on}          = $seen;
+  my $prev_status = $old->{status} || 'active';
+  if ($prev_status =~ /^(?:completed|skipped)\z/) {
+    $record{status} = $prev_status;
+  }
+  else {
+    $record{status}           = 'active';
+    $record{status_evidence}  = 'revend' if $prev_status eq 'no_longer_listed';
+  }
+  $record{actions}          = $old->{actions} || [];
+  write_json_file($path, \%record);
+  return \%record;
+}
+
+sub all_records {
+  my $dir = shift;
+  my @records;
+  my $title_dir;
+  return @records unless -d $dir;
+  opendir(my $dh, $dir) or return @records;
+  while (my $title = readdir($dh)) {
+    next if $title =~ /^\./;
+    $title_dir = File::Spec->catfile($dir, $title);
+    next unless -d $title_dir;
+    opendir(my $th, $title_dir) or next;
+    while (my $file = readdir($th)) {
+      next unless $file =~ /\.json\z/;
+      my $rec = read_json_file(File::Spec->catfile($title_dir, $file));
+      push @records, $rec if $rec && $rec->{id};
+    }
+    closedir $th;
+  }
+  closedir $dh;
+  return @records;
+}
+
+sub infer_status_hint {
+  my ($record, $records, $now_epoch) = @_;
+  my $age = $now_epoch - ($record->{first_seen_epoch} || $now_epoch);
+  return 'likely_72h_expiry' if $record->{first_seen_epoch} && $age > 72 * 3600;
+  for my $rec (@{$records || []}) {
+    next unless $rec->{name} eq $record->{name};
+    next unless ($rec->{status} || '') eq 'completed';
+    return 'title_completed_by_us_recently';
+  }
+  return 'likely_sniped';
+}
+
+sub retire_missing_instances {
+  my ($records, $fresh_ids_by_building, $now_epoch) = @_;
+  my @retired;
+  for my $record (@$records) {
+    next unless ($record->{status} || 'active') eq 'active';
+    my $seen = $record->{seen_on} || {};
+    my @buildings = map { keys %$_ } values %$seen;
+    next unless @buildings;
+    my ($evidence, $missing) = (0, 0);
+    for my $building_id (@buildings) {
+      my $fresh = $fresh_ids_by_building->{$building_id};
+      next unless $fresh;
+      $evidence++;
+      $missing++ unless grep { $_ == $record->{id} } @$fresh;
+    }
+    next unless $evidence && $missing == $evidence;
+    $record->{status}          = 'no_longer_listed';
+    $record->{status_at}       = now_stamp();
+    $record->{status_evidence} = "list_diff:all_vending_buildings";
+    $record->{status_hint}     = infer_status_hint($record, $records, $now_epoch);
+    push @retired, $record;
+  }
+  return @retired;
+}
+
+sub run {
+  parse_args();
+  return offline_report() if $noaction >= 2;
+  online_run();
+  return;
+}
+
+sub online_run {
+  emit("online flow not yet implemented; use --noaction --noaction for the offline report");
+  return;
+}
+
+sub offline_report {
+  my @records = all_records($missions_dir);
+  return emit("offline: no mission records under $missions_dir yet") unless @records;
+  my %by_status;
+  push @{$by_status{$_->{status} || 'active'}}, $_ for @records;
+  emit(sprintf("offline report: %d records (%s)",
+              scalar(@records),
+              join(", ", map { "$_: " . scalar @{$by_status{$_}} } sort keys %by_status)));
+  for my $rec (@records) {
+    my $letter = $rec->{lcot_letter} ? " plan $rec->{lcot_letter}" : "";
+    emit(sprintf("  [%s] %s (id %s)%s", $rec->{status} || 'active', $rec->{name}, $rec->{id}, $letter));
+    for my $action (@{$rec->{actions} || []}) {
+      my $eta = $action->{eta} ? " eta $action->{eta}" : "";
+      emit(sprintf("    %s %s%s%s", $action->{time} || '?', $action->{action},
+                   defined $action->{result} ? " -> $action->{result}" : "", $eta))
+        if $action->{action} =~ /^(?:send|complete|skip)\b/;
+    }
+  }
+  return 1;
+}
+
+run() unless caller;
+
+1;
