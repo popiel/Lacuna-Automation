@@ -452,6 +452,194 @@ sub compute_essentia_floor {
   return max($base || 20, ($needed->{essentia} || 0) + 10);
 }
 
+sub spec_key {
+  my $spec = shift;
+  return sprintf("%s#%05d#%05d#%05d#%05d",
+                 $spec->{type},
+                 $spec->{combat}    || 0,
+                 $spec->{speed}     || 0,
+                 $spec->{stealth}   || 0,
+                 $spec->{hold_size} || 0);
+}
+
+sub merge_specs {
+  my $specs = shift;
+  my %merged;
+  for my $spec (@{$specs || []}) {
+    my $key = spec_key($spec);
+    if ($merged{$key}) {
+      $merged{$key}{quantity} += $spec->{quantity} || 1;
+    }
+    else {
+      my %copy = %$spec;
+      $copy{quantity} ||= 1;
+      $merged{$key} = \%copy;
+    }
+  }
+  return [values %merged];
+}
+
+sub stat_order_key {
+  my $ship = shift;
+  return sprintf("%07d%06d%05d%04d%02d",
+                 $ship->{hold_size}   || 0,
+                 $ship->{speed}       || 0,
+                 $ship->{stealth}     || 0,
+                 $ship->{combat}      || 0,
+                 $ship->{berth_level} || 0);
+}
+
+sub ship_name_order {
+  return lc($a->{name} // '') cmp lc($b->{name} // '')
+      || ($a->{id} || 0) <=> ($b->{id} || 0);
+}
+
+sub ship_stat_order {
+  return stat_order_key($a) cmp stat_order_key($b)
+      || ($a->{id} || 0) <=> ($b->{id} || 0);
+}
+
+sub mirror_consume {
+  my ($ships, $specs, $order) = @_;
+  my $merged = merge_specs($specs);
+  my $total_needed = sum(map { $_->{quantity} } @$merged);
+  my %by_key;
+  my $pass = 1;
+  my @messages;
+  for my $spec (@$merged) {
+    my @candidates = grep {
+      ship_meets_spec($_, $spec) && (($_->{task} || 'Docked') eq 'Docked')
+    } @$ships;
+    my $cmp = $order eq 'stats' ? \&ship_stat_order : \&ship_name_order;
+    @candidates = sort $cmp @candidates;
+    splice(@candidates, $total_needed) if @candidates > $total_needed;
+    if (@candidates < $spec->{quantity}) {
+      $pass = 0;
+      push @messages, sprintf("Need %d of %s (speed >= %s, stealth >= %s, hold size >= %s, combat >= %s, berth >= %s)",
+                              $spec->{quantity}, $spec->{type},
+                              $spec->{speed} || 0, $spec->{stealth} || 0,
+                              $spec->{hold_size} || 0, $spec->{combat} || 0,
+                              $spec->{berth_level} || 0);
+    }
+    $by_key{spec_key($spec)} = {
+      spec        => $spec,
+      candidates  => \@candidates,
+      total_found => scalar @candidates,
+    };
+  }
+  my @id_list;
+  if ($pass) {
+    my %pending = %by_key;
+    while (%pending) {
+      my ($key) = sort {
+        ($pending{$a}{total_found} - $pending{$a}{spec}{quantity})
+        <=>
+        ($pending{$b}{total_found} - $pending{$b}{spec}{quantity})
+        || $a cmp $b
+      } keys %pending;
+      my $entry = $pending{$key};
+      my @taken;
+      for my $ship (@{$entry->{candidates}}) {
+        last if scalar @taken >= $entry->{spec}{quantity};
+        next if grep { $_ == ($ship->{id} || 0) } @id_list;
+        push @taken, $ship->{id};
+      }
+      push @id_list, @taken;
+      delete $pending{$key};
+      for my $lkey (keys %pending) {
+        $pending{$lkey}{candidates} = [ grep {
+          my $id = $_->{id} || 0;
+          !grep { $_ == $id } @taken;
+        } @{$pending{$lkey}{candidates}} ];
+        $pending{$lkey}{total_found} = scalar @{$pending{$lkey}{candidates}};
+      }
+    }
+    if ($total_needed > scalar @id_list) {
+      $pass = 0;
+      push @messages, "Total qualifying ships, came up short.";
+    }
+  }
+  return { pass => $pass, messages => \@messages, ids => \@id_list };
+}
+
+sub scheme_name {
+  my ($prefix, $ship) = @_;
+  return sprintf("%s h%07d s%06d t%05d c%04d b%02d",
+                 $prefix,
+                 $ship->{hold_size}   || 0,
+                 $ship->{speed}       || 0,
+                 $ship->{stealth}     || 0,
+                 $ship->{combat}      || 0,
+                 $ship->{berth_level} || 0);
+}
+
+sub is_scheme_name {
+  my $name = shift // '';
+  return $name =~ /\A(?:zz|aa)m h\d{7} s\d{6} t\d{5} c\d{4} b\d{2}\z/ ? 1 : 0;
+}
+
+sub simulate_rename_plan {
+  my ($ships, $specs, $mode) = @_;
+  my $prefix = $mode eq 'keep' ? 'zzm' : 'aam';
+  my $desired = mirror_consume($ships, $specs, 'stats');
+  return { feasible => 0, renames => {} } unless $desired->{pass};
+  my @desired_ids = @{$desired->{ids}};
+  my %renames;
+  my @working = map { { %{$_} } } @$ships;
+  my $guard = scalar(@working) + 1;
+  while ($guard-- > 0) {
+    for my $ship (@working) {
+      $ship->{name} = $renames{$ship->{id}} if exists $renames{$ship->{id}};
+    }
+    my $would = mirror_consume(\@working, $specs, 'name');
+    my @consumed_undesired = grep { my $id = $_; !grep { $_ == $id } @desired_ids } @{$would->{ids}};
+    my @desired_missed     = grep { my $id = $_; !grep { $_ == $id } @{$would->{ids}} } @desired_ids;
+    my @primary   = $mode eq 'keep' ? @consumed_undesired : @desired_missed;
+    my @secondary = $mode eq 'keep' ? @desired_missed     : @consumed_undesired;
+    return { feasible => 1, renames => \%renames, ids => $would->{ids} }
+      unless @primary || @secondary;
+    my $progress = rename_stragglers(\@primary, \%renames, \@working, $prefix);
+    $progress = rename_stragglers(\@secondary, \%renames, \@working, $prefix) unless $progress;
+    last unless $progress;
+  }
+  return { feasible => 0, renames => \%renames };
+}
+
+sub rename_stragglers {
+  my ($ids, $renames, $working, $prefix) = @_;
+  my $progress = 0;
+  for my $id (@$ids) {
+    next if exists $renames->{$id};
+    my ($ship) = grep { ($_->{id} || 0) == $id } @$working;
+    next unless $ship;
+    my $new = scheme_name($prefix, $ship);
+    next if ($ship->{name} // '') eq $new;
+    $renames->{$id} = $new;
+    $progress++;
+  }
+  return $progress;
+}
+
+sub choose_rename_plan {
+  my ($ships, $specs) = @_;
+  my $would = mirror_consume($ships, $specs, 'name');
+  return { needed => 0, mode => '', renames => {} } unless $would->{pass};
+  my $desired = mirror_consume($ships, $specs, 'stats');
+  return { needed => 0, mode => '', renames => {} } unless $desired->{pass};
+  my %want = map { $_ => 1 } @{$desired->{ids}};
+  return { needed => 0, mode => '', renames => {} } unless grep { !$want{$_} } @{$would->{ids}};
+  my $keep    = simulate_rename_plan($ships, $specs, 'keep');
+  my $consume = simulate_rename_plan($ships, $specs, 'consume');
+  my $keep_n    = $keep->{feasible}    ? scalar keys %{$keep->{renames}}    : undef;
+  my $consume_n = $consume->{feasible} ? scalar keys %{$consume->{renames}} : undef;
+  return { needed => 0, mode => '', renames => {}, blocked => 1 }
+    unless defined $keep_n || defined $consume_n;
+  if (defined $keep_n && (!defined $consume_n || $keep_n <= $consume_n)) {
+    return { needed => $keep_n, mode => 'keep', renames => $keep->{renames}, plan => $keep };
+  }
+  return { needed => $consume_n, mode => 'consume', renames => $consume->{renames}, plan => $consume };
+}
+
 sub run {
   parse_args();
   return offline_report() if $noaction >= 2;

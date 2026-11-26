@@ -343,4 +343,149 @@ subtest 'compute_essentia_floor' => sub {
   is(compute_essentia_floor({ essentia => 0 }, 20), 20, 'base floor with no essentia need');
 };
 
+sub ship {
+  my (%args) = @_;
+  return {
+    id => delete($args{id}) // 1, name => delete($args{name}) // 'Ship',
+    type => delete($args{type}) // 'scow', task => delete($args{task}) // 'Docked',
+    speed => delete($args{speed}) // 100, stealth => delete($args{stealth}) // 0,
+    hold_size => delete($args{hold}) // 1000, combat => delete($args{combat}) // 0,
+    berth_level => delete($args{berth}) // 1, %args,
+  };
+}
+
+subtest 'mirror_consume' => sub {
+  plan tests => 10;
+  my @ships = (
+    ship(id => 1, name => 'Alpha', hold => 400000),
+    ship(id => 2, name => 'Bravo', hold => 40000),
+    ship(id => 3, name => 'Caret', hold => 350000),
+  );
+  my $result = mirror_consume(\@ships, [{ type => 'scow', quantity => 2, hold_size => 40000 }], 'name');
+  ok($result->{pass}, 'two scows available');
+  is_deeply($result->{ids}, [1, 2], 'alphabetical name order with rows cap');
+
+  $result = mirror_consume(\@ships, [{ type => 'scow', quantity => 2, hold_size => 40000 }], 'stats');
+  is_deeply($result->{ids}, [2, 3], 'stat order picks the least qualified first');
+
+  $result = mirror_consume(\@ships, [{ type => 'scow', quantity => 4, hold_size => 40000 }], 'name');
+  ok(!$result->{pass}, 'shortfall fails');
+  like($result->{messages}[0], qr/^Need 4 of scow/, 'shortfall message');
+
+  my @mixed = (ship(id => 1, name => 'Docked1'), ship(id => 2, name => 'Flying1', task => 'Travelling'));
+  $result = mirror_consume(\@mixed, [{ type => 'scow', quantity => 2 }], 'name');
+  ok(!$result->{pass}, 'travelling ships are not candidates');
+
+  my @specs = (
+    { type => 'scow', quantity => 2, hold_size => 100 },
+    { type => 'scow', quantity => 1, hold_size => 300 },
+  );
+  my @pool = (
+    ship(id => 1, name => 'D1', hold => 100),
+    ship(id => 2, name => 'D2', hold => 200),
+    ship(id => 3, name => 'D3', hold => 300),
+  );
+  $result = mirror_consume(\@pool, \@specs, 'name');
+  ok($result->{pass}, 'multi-spec pass');
+  is_deeply([sort { $a <=> $b } @{$result->{ids}}], [1, 2, 3], 'no ship used for two specs');
+
+  my @tight = (
+    ship(id => 1, name => 'Alpha', hold => 400000),
+    ship(id => 2, name => 'Small', hold => 40000),
+  );
+  $result = mirror_consume(\@tight, [
+    { type => 'scow', quantity => 1, hold_size => 40000 },
+    { type => 'scow', quantity => 1, hold_size => 150000 },
+  ], 'name');
+  is_deeply([sort { $a <=> $b } @{$result->{ids}}], [1, 2], 'tightest spec assigned first');
+
+  my @merged = (
+    { type => 'scow', quantity => 1, hold_size => 100 },
+    { type => 'scow', quantity => 2, hold_size => 100 },
+  );
+  is_deeply(merge_specs(\@merged), [{ type => 'scow', quantity => 3, hold_size => 100 }],
+            'identical specs merge quantities');
+};
+
+subtest 'scheme names' => sub {
+  plan tests => 4;
+  is(scheme_name('zzm', ship(hold => 150000, speed => 200)),
+     'zzm h0150000 s000200 t00000 c0000 b01', 'keeper name format');
+  is(scheme_name('aam', ship(hold => 4000, speed => 200)),
+     'aam h0004000 s000200 t00000 c0000 b01', 'sacrifice name format');
+  ok(is_scheme_name('zzm h0150000 s000200 t00000 c0000 b01'), 'scheme name recognized');
+  ok(!is_scheme_name('Scow 7'), 'ordinary name not recognized');
+};
+
+subtest 'choose_rename_plan' => sub {
+  plan tests => 12;
+  my @ships = (
+    ship(id => 1, name => 'B1', hold => 400000),
+    ship(id => 2, name => 'W1', hold => 40000),
+  );
+  my $plan = choose_rename_plan(\@ships, [{ type => 'scow', quantity => 1, hold_size => 40000 }]);
+  is($plan->{needed}, 1, 'one rename settles the tie case');
+  is($plan->{mode}, 'keep', 'ties prefer the keep plan');
+  is($plan->{renames}{1}, 'zzm h0400000 s000100 t00000 c0000 b01', 'keeper renamed by absolute stats');
+
+  my @cascade = (
+    (map { ship(id => $_, name => "Keeper $_", hold => 200000 + $_ * 50000) } 1 .. 6),
+    ship(id => 7, name => 'W1', hold => 40000),
+    ship(id => 8, name => 'W2', hold => 41000),
+  );
+  $plan = choose_rename_plan(\@cascade, [{ type => 'scow', quantity => 2, hold_size => 40000 }]);
+  is($plan->{mode}, 'consume', 'many keepers ahead of few lesser ships: consume plan wins');
+  is($plan->{needed}, 2, 'consume plan renames only the two sacrifices');
+  is_deeply([sort keys %{$plan->{renames}}], [7, 8], 'sacrifices renamed, keepers untouched');
+
+  my @aligned = (
+    ship(id => 1, name => 'aam h0004000 s000100 t00000 c0000 b01', hold => 40000),
+    ship(id => 2, name => 'zzm h0400000 s000100 t00000 c0000 b01', hold => 400000),
+  );
+  $plan = choose_rename_plan(\@aligned, [{ type => 'scow', quantity => 1, hold_size => 40000 }]);
+  is($plan->{needed}, 0, 'already-aligned fleet needs no renames');
+
+  my @short = (ship(id => 1, name => 'Only1', hold => 400000));
+  $plan = choose_rename_plan(\@short, [{ type => 'scow', quantity => 2, hold_size => 40000 }]);
+  is($plan->{needed}, 0, 'unfulfillable ship count means no renames');
+
+  my @keeper_scheme = (
+    ship(id => 1, name => 'zzm h0400000 s000100 t00000 c0000 b01', hold => 400000),
+    ship(id => 2, name => 'W1', hold => 40000),
+    ship(id => 3, name => 'W2', hold => 41000),
+  );
+  $plan = choose_rename_plan(\@keeper_scheme, [{ type => 'scow', quantity => 2, hold_size => 40000 }]);
+  is($plan->{needed}, 0, 'scheme-named keeper already sorts last');
+
+  my @handnamed = (
+    ship(id => 1, name => 'B1', hold => 400000),
+    ship(id => 2, name => 'Zzzz Guardian', hold => 40000),
+  );
+  $plan = choose_rename_plan(\@handnamed, [{ type => 'scow', quantity => 1, hold_size => 40000 }]);
+  is($plan->{needed}, 1, 'hand-named late ship settles with one rename');
+  is($plan->{mode}, 'consume', 'keep cannot sort past zzz, so the plan switches direction');
+  is_deeply($plan->{renames}, { 2 => 'aam h0040000 s000100 t00000 c0000 b01' },
+            'the lesser ship itself is renamed early and consumed');
+};
+
+subtest 'simulate_rename_plan idempotence' => sub {
+  plan tests => 4;
+  my @ships = (
+    ship(id => 1, name => 'zzm h0400000 s000100 t00000 c0000 b01', hold => 400000),
+    ship(id => 2, name => 'W1', hold => 40000),
+    ship(id => 3, name => 'B3', hold => 500000),
+  );
+  my $result = simulate_rename_plan(\@ships, [{ type => 'scow', quantity => 2, hold_size => 40000 }], 'keep');
+  ok($result->{feasible}, 'keep plan settles');
+  is_deeply($result->{renames}, { 3 => 'zzm h0500000 s000100 t00000 c0000 b01' },
+            'renames only the non-scheme keeper, stat-based and stable');
+
+  my @settled = map {
+    $_->{id} == 3 ? { %{$_}, name => 'zzm h0500000 s000100 t00000 c0000 b01' } : $_
+  } @ships;
+  $result = simulate_rename_plan(\@settled, [{ type => 'scow', quantity => 2, hold_size => 40000 }], 'keep');
+  ok($result->{feasible}, 'settled fleet is feasible');
+  is(scalar keys %{$result->{renames}}, 0, 'settled fleet yields no further renames');
+};
+
 done_testing();
