@@ -15,7 +15,10 @@ BEGIN {
 }
 require $script;
 
-our ($noaction, $quiet, $missions_dir, $debug, $copies_goal, $copies_keep, $list_at);
+our ($noaction, $quiet, $missions_dir, $debug, $copies_goal, $copies_keep, $list_at,
+     $client, $empire_name, $essentia_floor, $transmute_cap, $sst_body_id,
+     %buildings_for, %mc_for, %trade_for, %transporter_for, %ports_for, %yards_for,
+     %body_coords);
 
 $noaction = 1;
 $quiet    = 1;
@@ -246,27 +249,27 @@ subtest 'classify_rewards' => sub {
   is($letter, 'D', 'LCOT letter extracted');
   is($reason, 'LCOT plan D', 'LCOT reason');
 
-  ($class, $reason) = classify_rewards(parse_items(['1,000 gold']), $needed);
+  ($class, undef, $reason) = classify_rewards(parse_items(['1,000 gold']), $needed);
   is($class, 'useful', 'needed resource is useful');
 
-  ($class, $reason) = classify_rewards(parse_items(['3,000 lapis']), $needed);
+  ($class, undef, $reason) = classify_rewards(parse_items(['3,000 lapis']), $needed);
   is($class, 'useless', 'unneeded resource is useless');
 
-  ($class, $reason) = classify_rewards(
+  ($class, undef, $reason) = classify_rewards(
     parse_items(['    1 Scow (speed: 10, stealth: 0, hold size: 100, combat: 0, berth: 1)']), $needed);
   is($class, 'useful', 'ship meeting a needed minimum is useful');
 
-  ($class, $reason) = classify_rewards(
+  ($class, undef, $reason) = classify_rewards(
     parse_items(['    1 Scow (speed: 10, stealth: 0, hold size: 50, combat: 0, berth: 1)']), $needed);
   is($class, 'useless', 'ship below a needed hold minimum is useless');
 
-  ($class, $reason) = classify_rewards(parse_items(['1 Halls of Vrbansk level 1 plan']), $needed);
+  ($class, undef, $reason) = classify_rewards(parse_items(['1 Halls of Vrbansk level 1 plan']), $needed);
   is($class, 'useful', 'plan matching a needed class is useful');
 
-  ($class, $reason) = classify_rewards(parse_items(['1 Halls of Vrbansk level 1+1 plan']), $needed);
+  ($class, undef, $reason) = classify_rewards(parse_items(['1 Halls of Vrbansk level 1+1 plan']), $needed);
   is($class, 'useful', 'plan exceeding a needed level is useful');
 
-  ($class, $reason) = classify_rewards(parse_items(['1 Sand level 5 plan']), $needed);
+  ($class, undef, $reason) = classify_rewards(parse_items(['1 Sand level 5 plan']), $needed);
   is($class, 'useless', 'unneeded plan class is useless');
 };
 
@@ -486,6 +489,193 @@ subtest 'simulate_rename_plan idempotence' => sub {
   $result = simulate_rename_plan(\@settled, [{ type => 'scow', quantity => 2, hold_size => 40000 }], 'keep');
   ok($result->{feasible}, 'settled fleet is feasible');
   is(scalar keys %{$result->{renames}}, 0, 'settled fleet yields no further renames');
+};
+
+package FakeClient;
+
+our $AUTOLOAD;
+
+sub new {
+  my ($class, %args) = @_;
+  return bless {
+    calls     => [],
+    responses => $args{responses} || {},
+    buildings => $args{buildings} || {},
+  }, $class;
+}
+
+sub calls { return $_[0]->{calls} }
+
+sub calls_for {
+  my ($self, $method) = @_;
+  return grep { $_->[0] eq $method } @{$self->{calls}};
+}
+
+sub call {
+  my $self = shift;
+  my $api = shift;
+  my $method = shift;
+  push @{$self->{calls}}, ["$api/$method", @_];
+  my $resp = $self->{responses}{"$api/$method"};
+  return ref($resp) eq 'CODE' ? $resp->($self, @_) : $resp;
+}
+
+sub find_building {
+  my ($self, $body_id, $name) = @_;
+  my $bh = $self->{buildings}{$body_id};
+  return wantarray ? () : undef unless $bh;
+  my @found = sort { $a->{level} <=> $b->{level} }
+              map { { %{$bh->{$_}}, id => $_ } }
+              grep { $bh->{$_}{name} eq $name } keys %$bh;
+  return wantarray ? @found : ($found[-1] || undef);
+}
+
+sub AUTOLOAD {
+  my $self = shift;
+  my $method = $AUTOLOAD;
+  $method =~ s/.*:://;
+  return if $method eq 'DESTROY';
+  push @{$self->{calls}}, [$method, @_];
+  my $resp = $self->{responses}{$method};
+  return ref($resp) eq 'CODE' ? $resp->($self, @_) : $resp;
+}
+
+package main;
+
+sub future_stamp {
+  my $time = shift;
+  my @g = gmtime($time);
+  return sprintf("%d %d %d %02d:%02d:%02d +0000", $g[3], $g[4] + 1, $g[5] + 1900, $g[2], $g[1], $g[0]);
+}
+
+subtest 'online flow with FakeClient' => sub {
+  plan tests => 18;
+  my $dir = tempdir(CLEANUP => 1);
+  my $saved_dir      = $missions_dir;
+  my $saved_noaction = $noaction;
+  my $saved_quiet    = $quiet;
+  $missions_dir = $dir;
+  $noaction     = 0;
+  $quiet        = 1;
+  %mc_for = %trade_for = %transporter_for = ();
+  %ports_for = ();
+  %yards_for = ();
+  %body_coords = ();
+  $sst_body_id = undef;
+
+  my %buildings = (
+    1 => {
+      100 => { name => 'Mission Command',  level => 3 },
+      101 => { name => 'Trade Ministry',   level => 5 },
+      102 => { name => 'Space Port',       level => 10 },
+      103 => { name => 'Shipyard',         level => 5 },
+    },
+    2 => {
+      200 => { name => 'Mission Command',  level => 2 },
+      201 => { name => 'Trade Ministry',   level => 4 },
+      202 => { name => 'Space Port',       level => 8 },
+    },
+  );
+  my $lcot_mission = {
+    id => 7, name => 'Tyleon Water Glyph', description => 'x',
+    objectives => [ '    1 Send Probe to Sol (10,-20).' ],
+    rewards => [ '1 Lost City of Tyleon (G) level 1 plan' ],
+    max_university_level => 10, date_posted => 'y',
+  };
+  my $junk_mission = {
+    id => 8, name => 'Toll Booth', description => 'x',
+    objectives => [ '100 gold' ],
+    rewards => [ '100 lapis' ],
+    max_university_level => 20, date_posted => 'y',
+  };
+  my $status = {
+    name => 'TestEmpire', id => 46, essentia => 500,
+    planets => { 1 => 'Alpha', 2 => 'Beta' },
+    bodies => { colonies => [
+      { empire_id => 46, x => 10,  y => -20, name => 'Alpha' },
+      { empire_id => 46, x => 900, y => 900, name => 'Beta' },
+    ] },
+  };
+  $client = FakeClient->new(
+    buildings => \%buildings,
+    responses => {
+      empire_status => $status,
+      body_buildings => sub {
+        my ($self, $body_id) = @_;
+        return { buildings => $self->{buildings}{$body_id} };
+      },
+      body_plans => { plans => [] },
+      body_status => { happiness => 1000 },
+      port_all_ships => sub {
+        my ($self, $body_id) = @_;
+        return { ships => $body_id == 2
+                 ? [ { id => 55, name => 'Probe', type => 'probe', task => 'Docked',
+                       speed => 100, stealth => 0, hold_size => 0, combat => 0, berth_level => 1 } ]
+                 : [] };
+      },
+      yard_buildable => { buildable => {} },
+      mission_list => { missions => [ $lcot_mission, $junk_mission ] },
+      mission_skip => { status => {} },
+      mission_complete => { status => {} },
+      send_ship => { ship => { id => 55, date_arrives => future_stamp(time() + 7200) } },
+      'trade/get_stored_resources' => { resources => {} },
+    },
+  );
+
+  my @body_ids = resolve_bodies($status);
+  is(scalar @body_ids, 2, 'both bodies resolved');
+  is_deeply($body_coords{1}, [10, -20], 'colony coordinates captured');
+
+  my @mcs = locate_mission_commands(\@body_ids);
+  is(scalar @mcs, 2, 'a Mission Command per body');
+  is($trade_for{1}, 101, 'trade ministry noted');
+
+  my ($vended, $fresh) = vend_and_record(\@mcs);
+  is(scalar keys %$vended, 2, 'two instances vended');
+  ok(-f File::Spec->catfile($dir, 'Tyleon_Water_Glyph', '7.json'), 'lcot record written');
+  ok(-f File::Spec->catfile($dir, 'Toll_Booth', '8.json'), 'junk record written');
+  retire_from_lists($vended, $fresh);
+
+  my $needed = needed_set_from_vended($vended);
+  my @work = classify_vended($vended, $needed, ['A' .. 'I']);
+  my ($lcot_entry) = grep { $_->{rec}{id} == 7 } @work;
+  my ($junk_entry) = grep { $_->{rec}{id} == 8 } @work;
+  is($lcot_entry->{class}, 'lcot', 'lcot mission classified');
+  is($lcot_entry->{rec}{lcot_letter}, 'G', 'lcot letter recorded');
+  is($junk_entry->{class}, 'useless', 'junk mission classified');
+
+  skip_useless(@work);
+  is(scalar $client->calls_for('mission_skip'), 1, 'only the junk mission is skipped');
+  my ($skip_call) = $client->calls_for('mission_skip');
+  is_deeply([$skip_call->[1], $skip_call->[2]], [100, 8], 'skip via first vending building');
+
+  my %plan_lists = (1 => { plans => [] }, 2 => { plans => [] });
+  fulfill_missions([$lcot_entry], \%plan_lists);
+  is(scalar $client->calls_for('send_ship'), 1, 'probe sent to the objective target');
+  my ($send_call) = $client->calls_for('send_ship');
+  is_deeply($send_call->[2], { x => 10, y => -20 }, 'fleet movement sent by coordinates');
+  is(scalar $client->calls_for('mission_complete'), 0, 'no completion attempt with ETA pending');
+
+  my $rec_path = File::Spec->catfile($dir, 'Tyleon_Water_Glyph', '7.json');
+  my $rec = read_json_file($rec_path);
+  $rec->{actions}[0]{eta} = time() - 100;
+  write_json_file($rec_path, $rec);
+  my $fresh_entry = {
+    mission => $lcot_mission,
+    rec     => read_json_file($rec_path),
+    on      => $lcot_entry->{on},
+    class   => 'lcot',
+  };
+
+  fulfill_missions([$fresh_entry], \%plan_lists);
+  is(scalar $client->calls_for('mission_complete'), 1, 'completion attempted once the ETA passed');
+  is(scalar $client->calls_for('send_ship'), 1, 'no duplicate send after arrival recorded');
+  $rec = read_json_file($rec_path);
+  is($rec->{status}, 'completed', 'record marked completed');
+
+  $missions_dir = $saved_dir;
+  $noaction     = $saved_noaction;
+  $quiet        = $saved_quiet;
 };
 
 done_testing();

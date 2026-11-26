@@ -9,6 +9,7 @@ BEGIN {
 
 use Carp;
 use Client;
+use Exception::Class;
 use File::Path qw(make_path);
 use File::Spec;
 use Getopt::Long;
@@ -67,8 +68,9 @@ END
 sub emit {
   return if $quiet;
   my $message = shift;
-  my $prefix  = shift // $empire_name // "missionary";
-  print Client::format_time(time()) . " missionary: $prefix: $message\n";
+  my $prefix  = shift // $empire_name // '';
+  print Client::format_time(time()) . " missionary"
+      . ($prefix ne '' ? ": $prefix" : "") . ": $message\n";
 }
 
 sub emit_debug {
@@ -252,6 +254,7 @@ sub record_instance {
   $record{first_seen}       = $old->{first_seen} || $now;
   $record{first_seen_epoch} = $old->{first_seen_epoch} || time();
   $record{last_seen}        = $now;
+  $record{last_seen_epoch}  = time();
   $record{seen_on}          = $seen;
   my $prev_status = $old->{status} || 'active';
   if ($prev_status =~ /^(?:completed|skipped)\z/) {
@@ -372,25 +375,25 @@ sub classify_rewards {
     my $letter = lcot_letter($plan->{class_name});
     return (lcot => $letter, "LCOT plan $letter") if $letter;
   }
-  return (useful => 'happiness') if $needed->{happiness} && $rewards->{happiness};
-  return (useful => 'essentia')  if $needed->{essentia}  && $rewards->{essentia};
+  return (useful => undef, 'happiness') if $needed->{happiness} && $rewards->{happiness};
+  return (useful => undef, 'essentia')  if $needed->{essentia}  && $rewards->{essentia};
   for my $resource (keys %{$rewards->{resources} || {}}) {
-    return (useful => "resource $resource") if $needed->{resources}{$resource};
+    return (useful => undef, "resource $resource") if $needed->{resources}{$resource};
   }
   for my $glyph (keys %{$rewards->{glyphs} || {}}) {
-    return (useful => "glyph $glyph") if $needed->{glyphs}{$glyph};
+    return (useful => undef, "glyph $glyph") if $needed->{glyphs}{$glyph};
   }
   for my $ship (@{$rewards->{ships} || []}) {
     for my $spec (@{$needed->{ships} || []}) {
-      return (useful => "ship $ship->{type}") if ship_meets_spec($ship, $spec);
+      return (useful => undef, "ship $ship->{type}") if ship_meets_spec($ship, $spec);
     }
   }
   for my $plan (@{$rewards->{plans} || []}) {
     for my $spec (@{$needed->{plans} || []}) {
-      return (useful => "plan $plan->{class_name}") if plan_meets_spec($plan, $spec);
+      return (useful => undef, "plan $plan->{class_name}") if plan_meets_spec($plan, $spec);
     }
   }
-  return (useless => 'nothing in the needed set');
+  return (useless => undef, 'nothing in the needed set');
 }
 
 sub should_skip {
@@ -640,15 +643,927 @@ sub choose_rename_plan {
   return { needed => $consume_n, mode => 'consume', renames => $consume->{renames}, plan => $consume };
 }
 
+sub online_run {
+  my $status = eval { connect_client() };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    emit($e->error, "rpc error");
+    return;
+  }
+  die $@ if $@;
+  my @body_ids = resolve_bodies($status);
+  return unless @body_ids;
+
+  my @mcs = locate_mission_commands(\@body_ids);
+  emit("no Mission Command on any body; nothing to do"), return unless @mcs;
+
+  my ($vended, $fresh_by_building) = vend_and_record(\@mcs);
+  retire_from_lists($vended, $fresh_by_building);
+
+  my %plan_lists = fetch_plan_lists(\@body_ids);
+  my $holdings   = lcot_holdings_from_plans(\%plan_lists);
+  my ($listed, $trades_active) = sst_listed_copies();
+  add_listed_holdings($holdings, $listed);
+  my @outstanding = outstanding_letters($holdings, $copies_goal);
+  emit_debug("LCOT holdings", $holdings);
+
+  my $needed = needed_set_from_vended($vended);
+  $essentia_floor = compute_essentia_floor($needed, $essentia_floor_override || 20);
+
+  my @work = classify_vended($vended, $needed, \@outstanding);
+  skip_useless(@work);
+  my @todo = grep { ($_->{class} eq 'lcot' || $_->{class} eq 'useful')
+                   && ($_->{rec}{status} || 'active') eq 'active' } @work;
+  @todo = sort { $a->{rec}{priority} <=> $b->{rec}{priority} } @todo;
+  fulfill_missions(\@todo, \%plan_lists);
+
+  sst_sales($holdings, $listed, $trades_active, \%plan_lists) if $sst_body_id;
+  summary($holdings);
+  return;
+}
+
+sub connect_client {
+  $client = Client->new(config => $config_name);
+  my $status = $client->empire_status;
+  $empire_name = $status->{name};
+  return $status;
+}
+
+sub resolve_bodies {
+  my $status = shift;
+  my $planets = $status->{planets} || {};
+  my @ids;
+  if (@body_names) {
+    for my $name (@body_names) {
+      my $id = eval { $client->match_planet($name) };
+      if (my $e = Exception::Class->caught('LacunaRPCException')) {
+        emit("$name: " . $e->error, "body");
+        next;
+      }
+      die $@ if $@;
+      push @ids, $id;
+    }
+  }
+  else {
+    @ids = sort keys %$planets;
+  }
+  emit("no usable bodies"), return () unless @ids;
+  my %id_by_name = reverse %$planets;
+  for my $colony (@{$status->{bodies}{colonies} || []}) {
+    next unless defined($colony->{x}) && defined($colony->{y});
+    next unless ($colony->{empire_id} || '') eq ($status->{id} || '');
+    my $id = $id_by_name{$colony->{name}};
+    $body_coords{$id} = [$colony->{x}, $colony->{y}] if $id;
+  }
+  return @ids;
+}
+
+sub locate_mission_commands {
+  my $body_ids = shift;
+  my @mcs;
+  for my $body_id (@$body_ids) {
+    my $buildings = eval { $client->body_buildings($body_id) };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit("$body_id: " . $e->error, "buildings");
+      next;
+    }
+    die $@ if $@;
+    next unless $buildings;
+    my @mc = $client->find_building($body_id, "Mission Command");
+    unless (@mc) {
+      emit("body $body_id has no Mission Command");
+      next;
+    }
+    my ($trade) = $client->find_building($body_id, "Trade Ministry");
+    my ($transporter) = $client->find_building($body_id, "Subspace Transporter");
+    my @ports = $client->find_building($body_id, "Space Port");
+    my @yards = $client->find_building($body_id, "Shipyard");
+    push @mcs, {
+      body_id => $body_id, building_id => $mc[0]{id}, level => $mc[0]{level},
+    };
+    $trade_for{$body_id}       = $trade->{id}       if $trade;
+    $transporter_for{$body_id} = $transporter->{id} if $transporter;
+    $ports_for{$body_id}       = [ map { $_->{level} } @ports ];
+    $yards_for{$body_id}       = [ map { $_->{id} } @yards ];
+    $sst_body_id = $body_id if $transporter;
+  }
+  return @mcs;
+}
+
+sub vend_and_record {
+  my $mcs = shift;
+  my $vended;
+  my %fresh_by_building;
+  for my $mc (@$mcs) {
+    my $list = eval { $client->mission_list($mc->{building_id}) };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit("mission list $mc->{building_id}: " . $e->error, "vend");
+      next;
+    }
+    die $@ if $@;
+    next unless $list && $list->{missions};
+    my @missions = @{$list->{missions}};
+    $fresh_by_building{$mc->{building_id}} = [ map { $_->{id} } @missions ];
+    for my $mission (@missions) {
+      my $entry = $vended->{$mission->{id}} ||= { mission => $mission, on => [] };
+      push @{$entry->{on}}, { body_id => $mc->{body_id}, building_id => $mc->{building_id} };
+      $entry->{rec} = record_instance($missions_dir, $mission, $mc->{body_id}, $mc->{building_id});
+    }
+  }
+  for my $id (sort keys %$vended) {
+    my $rec = $vended->{$id}{rec};
+    write_json_file(record_path($missions_dir, $rec), $rec);
+    emit("vended: $rec->{name} (id $id) [" . ($rec->{status} || 'active') . "]");
+  }
+  return ($vended, \%fresh_by_building);
+}
+
+sub retire_from_lists {
+  my ($vended, $fresh_by_building) = @_;
+  my @records = all_records($missions_dir);
+  my @retired = retire_missing_instances(\@records, $fresh_by_building, time());
+  for my $rec (@retired) {
+    write_json_file(record_path($missions_dir, $rec), $rec);
+    emit("retired from lists: $rec->{name} (id $rec->{id}) [$rec->{status_hint}]");
+  }
+  return;
+}
+
+sub fetch_plan_lists {
+  my $body_ids = shift;
+  my %plan_lists;
+  for my $body_id (@$body_ids) {
+    my $plans = eval { $client->body_plans($body_id) };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit_debug("plan fetch failed for $body_id: " . $e->error);
+      next;
+    }
+    die $@ if $@;
+    $plan_lists{$body_id} = $plans if $plans;
+  }
+  return %plan_lists;
+}
+
+sub sst_listed_copies {
+  return ([], 0) unless $sst_body_id && $transporter_for{$sst_body_id};
+  my $market = eval {
+    $client->call(transporter => view_my_market => $transporter_for{$sst_body_id}, 1)
+  };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    emit("view_my_market: " . $e->error, "sst");
+    return ([], 0);
+  }
+  die $@ if $@;
+  my @listed;
+  my $trades = $market->{trades} || [];
+  for my $trade (@$trades) {
+    my $items = parse_items([$trade->{offer}]);
+    push @listed, @{$items->{plans}};
+  }
+  return (\@listed, scalar @$trades);
+}
+
+sub needed_set_from_vended {
+  my $vended = shift;
+  my @lcot_parsed;
+  my $cutoff = time() - $lookback_days * 86400;
+  for my $entry (values %$vended) {
+    my $rewards = parse_items($entry->{mission}{rewards});
+    next unless grep { lcot_letter($_->{class_name}) } @{$rewards->{plans}};
+    push @lcot_parsed, parse_items($entry->{mission}{objectives});
+  }
+  for my $rec (all_records($missions_dir)) {
+    my $rewards = parse_items($rec->{rewards});
+    next unless grep { lcot_letter($_->{class_name}) } @{$rewards->{plans}};
+    next unless ($rec->{last_seen_epoch} || 0) >= $cutoff;
+    push @lcot_parsed, parse_items($rec->{objectives});
+  }
+  return union_needed(@lcot_parsed);
+}
+
+sub classify_vended {
+  my ($vended, $needed, $outstanding) = @_;
+  my %outstanding = map { $_ => 1 } @$outstanding;
+  my @work;
+  for my $id (sort keys %$vended) {
+    my $entry   = $vended->{$id};
+    my $rec     = $entry->{rec};
+    my $rewards = parse_items($entry->{mission}{rewards});
+    my ($class, $detail, $reason) = classify_rewards($rewards, $needed);
+    $rec->{classification}         = $class;
+    $rec->{classification_reason}  = $reason;
+    if ($class eq 'lcot') {
+      $rec->{lcot_letter} = $detail;
+      $rec->{priority}    = $outstanding{$detail} ? 0 : 1;
+    }
+    else {
+      $rec->{priority} = 2;
+    }
+    $entry->{class} = $class;
+    push @work, $entry;
+    write_json_file(record_path($missions_dir, $rec), $rec);
+  }
+  return @work;
+}
+
+sub skip_useless {
+  my @work = @_;
+  for my $entry (@work) {
+    next unless $entry->{class} eq 'useless';
+    my $rec        = $entry->{rec};
+    my $objectives = parse_items($entry->{mission}{objectives});
+    my $rewards    = parse_items($entry->{mission}{rewards});
+    next unless should_skip('useless', $rewards, $objectives);
+    my $on = $entry->{on}[0];
+    emit("skipping useless: $rec->{name} (id $rec->{id})");
+    if ($noaction) {
+      record_action($rec, { action => 'skip', result => 'simulated' });
+      next;
+    }
+    my $ok = eval { $client->mission_skip($on->{building_id}, $rec->{id}); 1 };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit("skip $rec->{id}: " . $e->error, "skip");
+      record_action($rec, { action => 'skip', result => 'error: ' . $e->error });
+      next;
+    }
+    die $@ if $@;
+    $rec->{status}          = 'skipped';
+    $rec->{status_at}       = now_stamp();
+    $rec->{status_evidence} = 'rpc:skip_mission';
+    record_action($rec, { action => 'skip', result => 'ok' });
+    write_json_file(record_path($missions_dir, $rec), $rec);
+  }
+  return;
+}
+
+sub record_action {
+  my ($rec, $action) = @_;
+  $action->{time} = now_stamp();
+  push @{$rec->{actions}}, $action;
+  return;
+}
+
+sub body_ships {
+  my $body_id = shift;
+  my $result = eval { $client->port_all_ships($body_id) };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    emit_debug("ships fetch failed for $body_id: " . $e->error);
+    return [];
+  }
+  die $@ if $@;
+  return $result ? $result->{ships} || [] : [];
+}
+
+sub fleet_eta_from_actions {
+  my ($rec, $mv) = @_;
+  my $best;
+  for my $action (@{$rec->{actions} || []}) {
+    next unless $action->{action} eq 'send';
+    next unless defined $action->{x} && defined $action->{y};
+    next unless $action->{x} == $mv->{x} && $action->{y} == $mv->{y};
+    next unless ($action->{ship_type} || '') eq $mv->{ship_type};
+    $best = $action->{eta} if $action->{eta} && (!defined($best) || $action->{eta} > $best);
+  }
+  return $best;
+}
+
+sub transit_to_target {
+  my ($ships, $mv) = @_;
+  for my $ship (@$ships) {
+    next unless ($ship->{task} || '') eq 'Travelling';
+    next unless ($ship->{type} || '') eq $mv->{ship_type};
+    my $to = $ship->{to} or next;
+    next unless defined $to->{x} && defined $to->{y};
+    return 1 if $to->{x} == $mv->{x} && $to->{y} == $mv->{y};
+    return 1 if ($to->{name} || '') eq $mv->{target_name};
+  }
+  return 0;
+}
+
+sub nearest_body_with_docked {
+  my ($ships_by_body, $mv) = @_;
+  my ($best_body, $best_ship, $best_dist);
+  for my $body_id (keys %$ships_by_body) {
+    my $coords = $body_coords{$body_id} or next;
+    for my $ship (@{$ships_by_body->{$body_id}}) {
+      next unless ($ship->{task} || '') eq 'Docked';
+      next unless ($ship->{type} || '') eq $mv->{ship_type};
+      my $dist = ($coords->[0] - $mv->{x}) ** 2 + ($coords->[1] - $mv->{y}) ** 2;
+      if (!defined($best_dist) || $dist < $best_dist) {
+        $best_body = $body_id;
+        $best_ship = $ship;
+        $best_dist = $dist;
+      }
+    }
+  }
+  return ($best_body, $best_ship);
+}
+
+sub send_fleet_movement {
+  my ($entry, $mv, $ships_by_body) = @_;
+  my $rec = $entry->{rec};
+  my ($from_body, $ship) = nearest_body_with_docked($ships_by_body, $mv);
+  unless ($ship) {
+    report_missing_ship_type($mv->{ship_type}, $entry);
+    return 'missing_ship';
+  }
+  emit("sending $mv->{ship_type} to $mv->{target_name} ($mv->{x},$mv->{y}) from $from_body");
+  if ($noaction) {
+    record_action($rec, {
+      action => 'send', ship_type => $mv->{ship_type},
+      x => $mv->{x}, y => $mv->{y}, ship_id => $ship->{id},
+      result => 'simulated', eta => time() + 3600,
+    });
+    return 'simulated';
+  }
+  my $result = eval { $client->send_ship($ship->{id}, { x => $mv->{x}, y => $mv->{y} }) };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    emit("send $mv->{ship_type} to $mv->{target_name}: " . $e->error, "send");
+    record_action($rec, {
+      action => 'send', ship_type => $mv->{ship_type}, x => $mv->{x}, y => $mv->{y},
+      result => 'error: ' . $e->error,
+    });
+    return 'error';
+  }
+  die $@ if $@;
+  my $eta = Client::parse_time($result->{ship}{date_arrives}) || (time() + 3600);
+  record_action($rec, {
+    action => 'send', ship_type => $mv->{ship_type}, x => $mv->{x}, y => $mv->{y},
+    ship_id => $ship->{id}, result => 'ok', eta => $eta,
+  });
+  emit(sprintf("sent ship %d, arrives %s", $ship->{id}, Client::format_time($eta)));
+  return 'sent';
+}
+
+sub report_missing_ship_type {
+  my ($type, $entry) = @_;
+  my $rec = $entry->{rec};
+  my $buildable = 0;
+  for my $body_id (keys %yards_for) {
+    for my $yard_id (@{$yards_for{$body_id}}) {
+      my $yb = eval { $client->yard_buildable($yard_id) };
+      next unless $yb;
+      $buildable = 1 if $yb->{buildable}{$type} && $yb->{buildable}{$type}{can};
+    }
+  }
+  my $note = $buildable
+    ? "no docked $type anywhere; add a 'shipbuild $type' queue line to build one"
+    : "no docked $type anywhere and it is not buildable; it must come from another mission or the exchange";
+  emit("$rec->{name}: $note", "blocker");
+  record_action($rec, { action => 'blocker', note => $note });
+  return;
+}
+
+sub anchor_stored {
+  my $anchor_id = shift;
+  return {} unless $trade_for{$anchor_id};
+  my $result = eval {
+    $client->call(trade => get_stored_resources => $trade_for{$anchor_id})
+  };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    emit_debug("stored resources failed for $anchor_id: " . $e->error);
+    return {};
+  }
+  die $@ if $@;
+  return $result->{resources} || {};
+}
+
+sub haul_resource {
+  my ($entry, $resource, $quantity, $anchor_id, $body_ids) = @_;
+  my $rec = $entry->{rec};
+  my $expiry = ($rec->{first_seen_epoch} || time()) + 72 * 3600;
+  for my $body_id (@$body_ids) {
+    next unless $body_id != $anchor_id;
+    next unless $trade_for{$body_id};
+    my $source = eval {
+      $client->call(trade => get_stored_resources => $trade_for{$body_id})
+    };
+    next unless $source && $source->{resources};
+    my $surplus = ($source->{resources}{$resource} || 0) - $quantity;
+    next unless $surplus > 0;
+    my $ships = eval {
+      $client->call(trade => get_trade_ships => $trade_for{$body_id}, $anchor_id)
+    };
+    next unless $ships && @{$ships->{ships} || []};
+    my ($ship) = sort { ($b->{hold_size} || 0) <=> ($a->{hold_size} || 0) } @{$ships->{ships}};
+    my $load = min($quantity, $ship->{hold_size} || 0, $surplus);
+    next unless $load > 0;
+    emit("hauling $load $resource from $body_id to $anchor_id on ship $ship->{id}");
+    if ($noaction) {
+      record_action($rec, { action => 'haul', resource => $resource,
+                             quantity => $load, from => $body_id, result => 'simulated' });
+      return 'simulated';
+    }
+    my $result = eval {
+      $client->trade_push($trade_for{$body_id}, $anchor_id,
+                          [ { type => $resource, quantity => $load } ],
+                          { ship_id => $ship->{id} });
+    };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit("haul $resource: " . $e->error, "haul");
+      next;
+    }
+    die $@ if $@;
+    my $eta = Client::parse_time($result->{fleet}{date_arrives});
+    record_action($rec, { action => 'haul', resource => $resource, quantity => $load,
+                           from => $body_id, result => 'ok', eta => $eta });
+    emit("hauled; " . ($eta ? "arrives " . Client::format_time($eta) : 'arrival unknown'));
+    emit("note: arrival " . ($eta ? Client::format_time($eta) : '?')
+         . " vs posting expiry " . Client::format_time($expiry))
+      if $eta && $eta > $expiry;
+    return 'hauled';
+  }
+  return '';
+}
+
+sub transmute_resource {
+  my ($entry, $anchor_id, $have_res, $want_res, $quantity, $essentia) = @_;
+  my $rec = $entry->{rec};
+  return '' unless $anchor_id == ($sst_body_id || -1) && $transporter_for{$anchor_id};
+  return '' unless $transmute_cap > 0;
+  return '' if $essentia - 3 < $essentia_floor;
+  my $stored = anchor_stored($anchor_id);
+  return '' unless ($stored->{$have_res} || 0) > $quantity;
+  emit("transmuting $quantity $have_res into $want_res on $anchor_id (3 essentia)");
+  if ($noaction) {
+    record_action($rec, { action => 'transmute', have => $have_res, want => $want_res,
+                           quantity => $quantity, result => 'simulated' });
+    $transmute_cap--;
+    return 'simulated';
+  }
+  my $ok = eval {
+    $client->call(transporter => trade_one_for_one =>
+                  $transporter_for{$anchor_id}, $have_res, $want_res, $quantity);
+    1;
+  };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    emit("transmute: " . $e->error, "transmute");
+    record_action($rec, { action => 'transmute', have => $have_res, want => $want_res,
+                          quantity => $quantity, result => 'error: ' . $e->error });
+    return '';
+  }
+  die $@ if $@;
+  record_action($rec, { action => 'transmute', have => $have_res, want => $want_res,
+                        quantity => $quantity, result => 'ok' });
+  $transmute_cap--;
+  return 'transmuted';
+}
+
+sub port_slots_free {
+  my ($anchor_id, $ships_by_body) = @_;
+  my $slots = 2 * sum(@{$ports_for{$anchor_id} || []});
+  my $used  = scalar @{$ships_by_body->{$anchor_id} || []};
+  return $slots - $used;
+}
+
+sub transfer_ships {
+  my ($entry, $specs, $anchor_id, $ships_by_body, $body_ids) = @_;
+  my $rec = $entry->{rec};
+  my $would = mirror_consume($ships_by_body->{$anchor_id} || [], $specs, 'name');
+  return 'ok' unless $would->{pass};
+  my $have = scalar @{$would->{ids}};
+  my $need = sum(map { $_->{quantity} } @{merge_specs($specs)});
+  return 'ok' if $have >= $need;
+  my $short  = $need - $have;
+  my $free   = port_slots_free($anchor_id, $ships_by_body);
+  my $slots  = max(0, min($short, $free));
+  my $moved = 0;
+  for my $body_id (@$body_ids) {
+    last if $slots <= 0;
+    next unless $body_id != $anchor_id;
+    my @spare = grep {
+      ($_->{task} || '') eq 'Docked'
+    } @{$ships_by_body->{$body_id} || []};
+    my $used_elsewhere = {};
+    for my $spec (@$specs) {
+      for my $ship (@spare) {
+        last if $slots <= 0;
+        next unless ship_meets_spec($ship, $spec);
+        next if $used_elsewhere->{$ship->{id}};
+        $used_elsewhere->{$ship->{id}} = 1;
+        emit("transferring $ship->{type} $ship->{id} from $body_id to anchor $anchor_id");
+        if ($noaction) {
+          record_action($rec, { action => 'transfer', ship_id => $ship->{id},
+                                 result => 'simulated', eta => time() + 3600 });
+          $moved++;
+          $slots--;
+          next;
+        }
+        my $result = eval { $client->send_ship($ship->{id}, { body_id => $anchor_id }) };
+        if (my $e = Exception::Class->caught('LacunaRPCException')) {
+          emit("transfer $ship->{id}: " . $e->error, "transfer");
+          next;
+        }
+        die $@ if $@;
+        my $eta = Client::parse_time($result->{ship}{date_arrives}) || (time() + 3600);
+        record_action($rec, { action => 'transfer', ship_id => $ship->{id},
+                              result => 'ok', eta => $eta });
+        $moved++;
+        $slots--;
+      }
+    }
+  }
+  return $moved ? 'transferred' : '';
+}
+
+sub report_ship_shortfall {
+  my ($entry, $specs, $anchor, $ships_by_body) = @_;
+  my $rec = $entry->{rec};
+  my $would = mirror_consume($ships_by_body->{$anchor} || [], $specs, 'name');
+  return if $would->{pass};
+  for my $message (@{$would->{messages}}) {
+    emit("$rec->{name}: $message", "blocker");
+    record_action($rec, { action => 'blocker', note => $message });
+    my ($display) = $message =~ /of (\S+) \(/;
+    next unless $display;
+    report_missing_ship_type(ship_type_from_display($display), $entry);
+  }
+  return;
+}
+
+sub push_cargo {
+  my ($entry, $kind, $anchor_id, $body_ids, $find_cargo) = @_;
+  my $rec = $entry->{rec};
+  for my $body_id (@$body_ids) {
+    next unless $body_id != $anchor_id;
+    next unless $trade_for{$body_id};
+    my $item = $find_cargo->($body_id);
+    next unless $item;
+    my $ships = eval {
+      $client->call(trade => get_trade_ships => $trade_for{$body_id}, $anchor_id)
+    };
+    next unless $ships && @{$ships->{ships} || []};
+    my ($ship) = sort { ($b->{hold_size} || 0) <=> ($a->{hold_size} || 0) } @{$ships->{ships}};
+    emit("pushing $kind cargo from $body_id to $anchor_id on ship $ship->{id}");
+    if ($noaction) {
+      record_action($rec, { action => 'push', kind => $kind, from => $body_id,
+                             result => 'simulated' });
+      return 'simulated';
+    }
+    my $result = eval {
+      $client->trade_push($trade_for{$body_id}, $anchor_id, [ $item ], { ship_id => $ship->{id} });
+    };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit("push $kind: " . $e->error, "push");
+      next;
+    }
+    die $@ if $@;
+    my $eta = Client::parse_time($result->{fleet}{date_arrives});
+    record_action($rec, { action => 'push', kind => $kind, from => $body_id,
+                           result => 'ok', eta => $eta });
+    return 'pushed';
+  }
+  return '';
+}
+
+sub fulfill_missions {
+  my ($todo, $plan_lists) = @_;
+  my @body_ids = sort keys %$plan_lists;
+  my %ships_by_body = map { $_ => body_ships($_) } @body_ids;
+  for my $entry (@$todo) {
+    my $rec      = $entry->{rec};
+    my $on       = $entry->{on}[0];
+    my $anchor   = $on->{body_id};
+    my $building = $on->{building_id};
+    my $objectives = parse_items($entry->{mission}{objectives});
+    emit("fulfilling $rec->{name} (id $rec->{id}) on body $anchor");
+    my $pending = 0;
+
+    for my $mv (@{$objectives->{fleet_movement}}) {
+      my $eta = fleet_eta_from_actions($rec, $mv);
+      if ($eta && $eta <= time()) {
+        emit_debug("fleet movement $mv->{ship_type} -> $mv->{target_name}: arrival recorded");
+        next;
+      }
+      my $in_transit = 0;
+      for my $body_id (@body_ids) {
+        $in_transit ||= transit_to_target($ships_by_body{$body_id} || [], $mv);
+      }
+      if ($in_transit) {
+        emit_debug("fleet movement $mv->{ship_type} -> $mv->{target_name}: already in transit");
+        next;
+      }
+      my $result = send_fleet_movement($entry, $mv, \%ships_by_body);
+      $pending++ if $result =~ /^(?:sent|simulated|missing_ship)$/;
+    }
+
+    my $stored = anchor_stored($anchor);
+    my $essentia = $client->empire_status->{essentia} || 0;
+    for my $resource (sort keys %{$objectives->{resources}}) {
+      my $need = $objectives->{resources}{$resource};
+      next if ($stored->{$resource} || 0) >= $need;
+      my $short = $need - ($stored->{$resource} || 0);
+      emit("$rec->{name}: short $short $resource on $anchor", "shortfall");
+      my $result = haul_resource($entry, $resource, $short, $anchor, \@body_ids);
+      $pending++ if $result;
+      if (!$result && $transmute_cap > 0) {
+        my ($have_res) = sort { ($stored->{$b} || 0) <=> ($stored->{$a} || 0) }
+                         grep { $_ ne $resource }
+                         sort keys %$stored;
+        $result = transmute_resource($entry, $anchor, $have_res, $resource,
+                                      $short, $essentia)
+          if $have_res;
+        $pending++ if $result;
+      }
+      if (!$result) {
+        emit("$rec->{name}: cannot cover $short $resource before expiry", "blocker");
+        record_action($rec, { action => 'blocker', note => "short $short $resource" });
+        $pending++;
+      }
+    }
+
+    my $anchor_happiness = eval { $client->body_status($anchor)->{happiness} } || 0;
+    if ($objectives->{happiness} && $anchor_happiness < $objectives->{happiness}) {
+      my $short = $objectives->{happiness} - $anchor_happiness;
+      emit("$rec->{name}: short $short happiness on $anchor (not haulable)", "blocker");
+      record_action($rec, { action => 'blocker', note => "short $short happiness" });
+      $pending++;
+    }
+
+    if ($objectives->{essentia}) {
+      if ($essentia < $objectives->{essentia}) {
+        emit("$rec->{name}: short " . ($objectives->{essentia} - $essentia) . " essentia (not fabricable)",
+             "blocker");
+        record_action($rec, { action => 'blocker', note => "short essentia" });
+        $pending++;
+      }
+    }
+
+    if (@{$objectives->{ships}}) {
+      my $result = transfer_ships($entry, $objectives->{ships}, $anchor, \%ships_by_body, \@body_ids);
+      $pending++ if $result && $result ne 'ok';
+      report_ship_shortfall($entry, $objectives->{ships}, $anchor, \%ships_by_body);
+      $ships_by_body{$anchor} = body_ships($anchor) if $result && $result ne 'ok';
+    }
+
+    for my $glyph_type (sort keys %{$objectives->{glyphs}}) {
+      my $need = $objectives->{glyphs}{$glyph_type};
+      my $have = 0;
+      my $anchor_glyphs = eval { $client->glyph_list($anchor) };
+      if ($anchor_glyphs) {
+        ($have) = map { $_->{quantity} } grep { $_->{name} eq $glyph_type }
+                  @{$anchor_glyphs->{glyphs} || []};
+        $have //= 0;
+      }
+      next if $have >= $need;
+      my $short = $need - $have;
+      emit("$rec->{name}: short $short $glyph_type glyphs", "shortfall");
+      my $result = push_cargo($entry, "glyph $glyph_type", $anchor, \@body_ids, sub {
+        my $body_id = shift;
+        my $glyphs = eval { $client->glyph_list($body_id) };
+        return unless $glyphs;
+        my ($found) = grep { $_->{name} eq $glyph_type && $_->{quantity} >= $short }
+                      @{$glyphs->{glyphs} || []};
+        return $found ? { type => 'glyph', name => $glyph_type, quantity => $short } : undef;
+      });
+      if (!$result) {
+        emit("$rec->{name}: no source body has $short $glyph_type glyphs", "blocker");
+        record_action($rec, { action => 'blocker', note => "short $short $glyph_type glyphs" });
+      }
+      $pending++ if $result;
+    }
+
+    for my $spec (@{$objectives->{plans}}) {
+      my $have = 0;
+      my $anchor_plans = $plan_lists->{$anchor} || {};
+      for my $plan (@{$anchor_plans->{plans} || []}) {
+        next unless ($plan->{name} || '') eq $spec->{class_name};
+        next unless ($plan->{level} || 0) >= $spec->{level};
+        next unless ($plan->{extra_build_level} || 0) >= $spec->{extra};
+        $have += $plan->{quantity} || 0;
+      }
+      next if $have >= $spec->{quantity};
+      my $short = $spec->{quantity} - $have;
+      emit("$rec->{name}: short $short $spec->{class_name} plans", "shortfall");
+      my $result = push_cargo($entry, "plan $spec->{class_name}", $anchor, \@body_ids, sub {
+        my $body_id = shift;
+        my $plans = $plan_lists->{$body_id} or return;
+        my ($found) = grep {
+          ($_->{name} || '') eq $spec->{class_name}
+          && ($_->{level} || 0) >= $spec->{level}
+          && ($_->{extra_build_level} || 0) >= $spec->{extra}
+        } @{$plans->{plans} || []};
+        return $found ? { type => 'plan', plan_type => $found->{plan_type},
+                          quantity => min($short, $found->{quantity} || 1) } : undef;
+      });
+      if (!$result) {
+        emit("$rec->{name}: no source body holds a sufficient $spec->{class_name} plan", "blocker");
+        record_action($rec, { action => 'blocker', note => "short $short $spec->{class_name} plans" });
+      }
+      $pending++ if $result;
+    }
+
+    write_json_file(record_path($missions_dir, $rec), $rec);
+    next if $pending;
+
+    if (@{$objectives->{ships}}) {
+      my $renames = protective_renames($entry, $objectives->{ships}, $anchor, \%ships_by_body);
+      next unless $renames;
+    }
+    attempt_completion($entry, $building, $objectives, \%ships_by_body, $anchor);
+  }
+  return;
+}
+
+sub protective_renames {
+  my ($entry, $specs, $anchor, $ships_by_body) = @_;
+  my $ships = $ships_by_body->{$anchor} || [];
+  my $plan = choose_rename_plan($ships, $specs);
+  if ($plan->{blocked}) {
+    my $rec = $entry->{rec};
+    emit("$rec->{name}: cannot align ship consumption without eating keepers; deferring hand-in",
+         "blocker");
+    record_action($rec, { action => 'blocker', note => 'rename plans infeasible' });
+    write_json_file(record_path($missions_dir, $rec), $rec);
+    return 0;
+  }
+  return 1 if !$plan->{needed};
+  my $rec = $entry->{rec};
+  emit(sprintf("%s: %d renames (%s plan) before hand-in",
+               $rec->{name}, $plan->{needed}, $plan->{mode}));
+  for my $id (sort keys %{$plan->{renames}}) {
+    my $name = $plan->{renames}{$id};
+    my ($ship) = grep { ($_->{id} || 0) == $id } @$ships;
+    if ($noaction) {
+      record_action($rec, { action => 'rename', ship_id => $id, name => $name,
+                             result => 'simulated' });
+      next;
+    }
+    my $ok = eval { $client->name_ship($anchor, $id, $name); 1 };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit("rename $id: " . $e->error, "rename");
+      record_action($rec, { action => 'rename', ship_id => $id, name => $name,
+                             result => 'error: ' . $e->error });
+      next;
+    }
+    die $@ if $@;
+    record_action($rec, { action => 'rename', ship_id => $id, name => $name, result => 'ok' });
+    ($ship) = grep { ($_->{id} || 0) == $id } @$ships;
+    $ship->{name} = $name if $ship;
+  }
+  write_json_file(record_path($missions_dir, $rec), $rec);
+  return 1;
+}
+
+sub attempt_completion {
+  my ($entry, $building_id, $objectives, $ships_by_body, $anchor) = @_;
+  my $rec = $entry->{rec};
+  my $eta_pending;
+  for my $action (@{$rec->{actions} || []}) {
+    $eta_pending = 1 if $action->{eta} && $action->{eta} > time();
+  }
+  if ($eta_pending) {
+    emit_debug("$rec->{name}: waiting for in-flight ships/cargo");
+    return;
+  }
+  if (@{$objectives->{ships}}) {
+    my $would = mirror_consume($ships_by_body->{$anchor} || [], $objectives->{ships}, 'name');
+    unless ($would->{pass}) {
+      emit_debug("$rec->{name}: ship objective still short, not attempting");
+      return;
+    }
+  }
+  emit("attempting completion of $rec->{name} (id $rec->{id})");
+  if ($noaction) {
+    record_action($rec, { action => 'complete', result => 'simulated' });
+    write_json_file(record_path($missions_dir, $rec), $rec);
+    return;
+  }
+  my $result = eval { $client->mission_complete($building_id, $rec->{id}) };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    my $text = $e->error;
+    if ($e->code == 1013) {
+      emit("$rec->{name}: not yet completable: $text", "complete");
+      record_action($rec, { action => 'complete', result => "1013: $text" });
+      handle_fleet_shortfall($entry, $text, $ships_by_body);
+    }
+    elsif ($e->code == 1002) {
+      emit("$rec->{name}: gone from the server: $text", "complete");
+      $rec->{status}          = 'no_longer_listed';
+      $rec->{status_at}       = now_stamp();
+      $rec->{status_evidence} = 'rpc:complete_mission:1002';
+      $rec->{status_hint}     = 'likely_sniped_or_expired';
+      record_action($rec, { action => 'complete', result => "1002: $text" });
+    }
+    else {
+      emit("$rec->{name}: completion failed: $text", "complete");
+      record_action($rec, { action => 'complete', result => $e->code . ": $text" });
+    }
+    write_json_file(record_path($missions_dir, $rec), $rec);
+    return;
+  }
+  die $@ if $@;
+  $rec->{status}          = 'completed';
+  $rec->{status_at}       = now_stamp();
+  $rec->{status_evidence} = 'rpc:complete_mission:ok';
+  record_action($rec, { action => 'complete', result => 'ok' });
+  write_json_file(record_path($missions_dir, $rec), $rec);
+  emit("completed: $rec->{name} (id $rec->{id})", "success");
+  return;
+}
+
+sub handle_fleet_shortfall {
+  my ($entry, $text, $ships_by_body) = @_;
+  return unless $text =~ /No (\S+) has arrived at (.*?) \((-?\d+),(-?\d+)\)/;
+  my $mv = {
+    ship_type   => ship_type_from_display($1),
+    target_name => $2,
+    x           => $3 + 0,
+    y           => $4 + 0,
+  };
+  my $rec = $entry->{rec};
+  my $eta = fleet_eta_from_actions($rec, $mv);
+  return unless $eta && $eta <= time();
+  emit("resending a $mv->{ship_type} to $mv->{target_name} after a passed-ETA arrival was not counted",
+       "complete");
+  send_fleet_movement($entry, $mv, $ships_by_body);
+  return;
+}
+
+sub sst_sales {
+  my ($holdings, $listed, $trades_active, $plan_lists) = @_;
+  my $listed_by_letter = {};
+  $listed_by_letter->{lcot_letter($_->{class_name})} += $_->{quantity} || 0 for @$listed;
+  my $sellable = sellable_copies($holdings, $listed_by_letter, $copies_keep);
+  return unless keys %$sellable;
+  if ($trades_active) {
+    emit("SST market already has an active listing; will list more after it sells");
+    return;
+  }
+  my ($letter) = sort keys %$sellable;
+  my $bld = $transporter_for{$sst_body_id} or return;
+  my $sst_plans = $plan_lists->{$sst_body_id} || {};
+  my ($copy) = grep {
+    ($_->{plan_type} || '') =~ /^LCOT\Q$letter\E\z/i && ($_->{quantity} || 0) > 0
+  } @{$sst_plans->{plans} || []};
+  if (!$copy) {
+    SOURCE: for my $body_id (sort keys %$plan_lists) {
+      next unless $body_id != $sst_body_id;
+      next unless $trade_for{$body_id};
+      my ($source) = grep {
+        ($_->{plan_type} || '') =~ /^LCOT\Q$letter\E\z/i && ($_->{quantity} || 0) > 0
+      } @{$plan_lists->{$body_id}{plans} || []};
+      next unless $source;
+      my $ships = eval {
+        $client->call(trade => get_trade_ships => $trade_for{$body_id}, $sst_body_id)
+      };
+      next unless $ships && @{$ships->{ships} || []};
+      my ($ship) = sort { ($b->{hold_size} || 0) <=> ($a->{hold_size} || 0) } @{$ships->{ships}};
+      emit("hauling LCOT$letter plan copy from $body_id to $sst_body_id for listing");
+      if ($noaction) {
+        emit("simulated: would push plan LCOT$letter to $sst_body_id");
+        return;
+      }
+      my $ok = eval {
+        $client->trade_push($trade_for{$body_id}, $sst_body_id,
+                            [ { type => 'plan', plan_type => $source->{plan_type}, quantity => 1 } ],
+                            { ship_id => $ship->{id} });
+        1;
+      };
+      if (my $e = Exception::Class->caught('LacunaRPCException')) {
+        emit("plan haul for listing: " . $e->error, "sst");
+        return;
+      }
+      die $@ if $@;
+      emit("plan hauled; listing next run");
+      return;
+    }
+    emit("sellable LCOT$letter copy exists but none is on the SST anchor or haulable to it", "sst");
+    return;
+  }
+  emit("listing one LCOT$letter plan copy on the SST market at $list_at essentia");
+  return if $noaction;
+  my $ok = eval {
+    $client->call(transporter => add_to_market => $bld,
+                  [ { type => 'plan', plan_type => $copy->{plan_type}, quantity => 1 } ],
+                  sprintf("%0.1f", $list_at));
+    1;
+  };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    emit("add_to_market: " . $e->error, "sst");
+    return;
+  }
+  die $@ if $@;
+  emit("listed LCOT$letter at $list_at essentia (1 essentia listing fee)", "success");
+  return;
+}
+
+sub summary {
+  my $holdings = shift;
+  my @records = all_records($missions_dir);
+  my %by_status;
+  push @{$by_status{$_->{status} || 'active'}}, $_ for @records;
+  my @outstanding = outstanding_letters($holdings || {}, $copies_goal);
+  emit(sprintf("summary: %d records (%s); outstanding LCOT letters: %s",
+               scalar(@records),
+               join(", ", map { "$_ " . scalar @{$by_status{$_}} } sort keys %by_status),
+               @outstanding ? join("", @outstanding) : 'none'));
+  return;
+}
+
 sub run {
   parse_args();
   return offline_report() if $noaction >= 2;
   online_run();
-  return;
-}
-
-sub online_run {
-  emit("online flow not yet implemented; use --noaction --noaction for the offline report");
   return;
 }
 
