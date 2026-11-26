@@ -16,6 +16,7 @@ REM (e.g. " 5" -> 105 %% 100 = 5) don't wrap around to match two-digit hours.
 set /a HHN=100%HH% %% 100
 if %MMN% LSS 5 (
   C:\Strawberry\perl\bin\perl.exe probe_hunter.pl --zone "2|-3" --zone "3|-3" --body Overlook --body Noseeum >> "logs\probe_hunter.log" 2>&1
+  C:\Strawberry\perl\bin\perl.exe missionary.pl >> "logs\missionary.log" 2>&1
   echo ======== trashman started %date% %time% >> "logs\trashman.log"
   C:\Strawberry\perl\bin\perl.exe trashman.pl --body=Noseeum --time=55m >> "logs\trashman.log" 2>&1
   C:\Strawberry\perl\bin\perl.exe trashman.pl --body=Overlook --time=55m >> "logs\trashman.log" 2>&1
@@ -26,6 +27,7 @@ if %MMN% LSS 5 (
 if %MMN% GEQ 30 (
   if %MMN% LSS 35 (
     C:\Strawberry\perl\bin\perl.exe probe_hunter.pl --zone "2|-3" --zone "3|-3" --body Overlook --body Noseeum >> "logs\probe_hunter.log" 2>&1
+    C:\Strawberry\perl\bin\perl.exe missionary.pl >> "logs\missionary.log" 2>&1
   )
 )
 

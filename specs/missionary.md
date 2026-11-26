@@ -245,10 +245,14 @@ Usage: `./run_perl.sh missionary.pl [--body Name] [--config file]
 
 ### 4. Status transitions from fresh lists
 
-- For each building: any recorded instance previously vended by that
-  building but absent from this run's fresh list -> status
-  `no_longer_listed`, evidence `list_diff:<building_id>`, plus the inferred
-  `status_hint`. Nothing is ever marked preemptively.
+- An active instance is retired (`no_longer_listed`, evidence
+  `list_diff:all_vending_buildings`, plus the inferred `status_hint`) only
+  when every building that previously vended it produced a fresh list this
+  run and none of those lists still contains it. Absence from a single
+  building is not evidence: `get_missions` caps the list at the building's
+  effective level, so a shorter Mission Command can omit a posting that a
+  taller one in the same zone still vends. Nothing is ever marked
+  preemptively; completing a title never touches sibling instances.
 
 ### 5. Compute holdings and needed set
 

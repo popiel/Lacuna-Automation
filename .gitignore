@@ -9,6 +9,7 @@ resource.log
 .*.swp
 logs/
 captcha/
+missions/
 *.db
 *.sqlite
 *.sqlite3
