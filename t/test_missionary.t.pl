@@ -877,4 +877,46 @@ subtest 'classification priorities' => sub {
   %glyph_halls_cache = %$saved_cache;
 };
 
+subtest 'refresh_classifications' => sub {
+  plan tests => 8;
+  my $saved_dir = $missions_dir;
+  $missions_dir = tempdir(CLEANUP => 1);
+
+  my $ore = { id => 51, name => 'Buried in Ore', objectives => ['30,000 water'],
+              rewards => ['45,000 magnetite'], max_university_level => 20,
+              description => 'x', date_posted => 'y' };
+  my $ore_rec = record_instance($missions_dir, $ore, 1, 10);
+  $ore_rec->{classification} = 'useless';
+  $ore_rec->{priority} = 9;
+  $ore_rec->{classification_reason} = 'nothing in the needed set';
+  write_json_file(record_path($missions_dir, $ore_rec), $ore_rec);
+
+  my $lcot = { id => 52, name => 'Old Tyleon Thing', objectives => [],
+               rewards => ['1 Lost City of Tyleon (F) level 1 plan'], max_university_level => 20,
+               description => 'x', date_posted => 'y' };
+  my $lcot_rec = record_instance($missions_dir, $lcot, 1, 10);
+  $lcot_rec->{classification} = 'useless';
+  $lcot_rec->{priority} = 9;
+  write_json_file(record_path($missions_dir, $lcot_rec), $lcot_rec);
+
+  my $needed = union_needed(parse_items(['5,000 magnetite']));
+  my $changed = refresh_classifications($needed, ['A' .. 'I']);
+  is($changed, 2, 'both stale records reclassified');
+
+  $ore_rec = read_json_file(record_path($missions_dir, $ore_rec));
+  is($ore_rec->{classification}, 'useful', 'ore mission now useful against the seeded needed set');
+  is($ore_rec->{priority}, 3, 'ore mission at plain-useful priority');
+  is($ore_rec->{classification_reason}, 'resource magnetite', 'reason names the match');
+
+  $lcot_rec = read_json_file(record_path($missions_dir, $lcot_rec));
+  is($lcot_rec->{classification}, 'lcot', 'retired LCOT record reclassified as lcot');
+  is($lcot_rec->{priority}, 0, 'outstanding letter priority');
+  is($lcot_rec->{lcot_letter}, 'F', 'letter recorded');
+
+  $changed = refresh_classifications($needed, ['A' .. 'I']);
+  is($changed, 0, 'second pass is a no-op');
+
+  $missions_dir = $saved_dir;
+};
+
 done_testing();

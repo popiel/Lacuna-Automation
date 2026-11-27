@@ -303,6 +303,11 @@ rewards, 3 = useful, 9 = useless (never fulfilled).
   provides. -> `mission_skip` (unless `--noaction`), recorded as an action
   and status change. On RPC failure, report and leave `active`.
 
+After classifying the vended missions, every record on disk (including
+retired ones) is re-classified against the current needed set and
+priorities; labels change in place while status and actions stay
+historical, so records never carry stale verdicts from earlier rules.
+
 ### 7. Fulfill
 
 Process lcot missions first (outstanding letters first), then useful

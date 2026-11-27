@@ -685,6 +685,7 @@ sub online_run {
   $essentia_floor = compute_essentia_floor($needed, $essentia_floor_override || 20);
 
   my @work = classify_vended($vended, $needed, \@outstanding);
+  refresh_classifications($needed, \@outstanding);
   skip_useless(@work);
   my @todo = grep { ($_->{class} eq 'lcot' || $_->{class} eq 'useful')
                    && ($_->{rec}{status} || 'active') eq 'active' } @work;
@@ -993,6 +994,19 @@ sub needed_set_from_vended {
   return union_needed(@lcot_parsed);
 }
 
+sub classification_for {
+  my ($rewards, $needed, $outstanding) = @_;
+  my ($class, $detail, $reason) = classify_rewards($rewards, $needed);
+  my $glyph_halls = rewards_glyph_halls($rewards);
+  if ($class eq 'lcot') {
+    return (lcot => ($outstanding->{$detail} ? 0 : 1), $reason, $detail);
+  }
+  elsif ($glyph_halls) {
+    return (useful => 2, "glyph/halls plan $glyph_halls", undef);
+  }
+  return ($class => ($class eq 'useful' ? 3 : 9), $reason, undef);
+}
+
 sub classify_vended {
   my ($vended, $needed, $outstanding) = @_;
   my %outstanding = map { $_ => 1 } @$outstanding;
@@ -1001,30 +1015,40 @@ sub classify_vended {
     my $entry   = $vended->{$id};
     my $rec     = $entry->{rec};
     my $rewards = parse_items($entry->{mission}{rewards});
-    my ($class, $detail, $reason) = classify_rewards($rewards, $needed);
-    my $glyph_halls = rewards_glyph_halls($rewards);
-    if ($class eq 'lcot') {
-      $rec->{lcot_letter}         = $detail;
-      $rec->{priority}            = $outstanding{$detail} ? 0 : 1;
-      $rec->{classification}      = 'lcot';
-      $rec->{classification_reason} = $reason;
+    my ($class, $priority, $reason, $letter) = classification_for($rewards, $needed, \%outstanding);
+    $rec->{classification}         = $class;
+    $rec->{classification_reason}  = $reason;
+    $rec->{priority}               = $priority;
+    if (defined $letter) {
+      $rec->{lcot_letter} = $letter;
     }
-    elsif ($glyph_halls) {
-      $class = 'useful';
-      $rec->{priority}            = 2;
-      $rec->{classification}      = 'useful';
-      $rec->{classification_reason} = "glyph/halls plan $glyph_halls";
-    }
-    else {
-      $rec->{priority}            = $class eq 'useful' ? 3 : 9;
-      $rec->{classification}      = $class;
-      $rec->{classification_reason} = $reason;
-    }
-    $entry->{class} = $rec->{classification};
+    $entry->{class} = $class;
     push @work, $entry;
     write_json_file(record_path($missions_dir, $rec), $rec);
   }
   return @work;
+}
+
+sub refresh_classifications {
+  my ($needed, $outstanding) = @_;
+  my %outstanding = map { $_ => 1 } @$outstanding;
+  my $changed = 0;
+  for my $rec (all_records($missions_dir)) {
+    next unless $rec->{rewards};
+    my $rewards = parse_items($rec->{rewards});
+    my ($class, $priority, $reason, $letter) = classification_for($rewards, $needed, \%outstanding);
+    next if ($rec->{classification}        // '') eq $class
+         && ($rec->{priority}              // -1) == $priority
+         && ($rec->{classification_reason} // '') eq $reason;
+    $rec->{classification}        = $class;
+    $rec->{priority}             = $priority;
+    $rec->{classification_reason} = $reason;
+    $rec->{lcot_letter}          = $letter if defined $letter;
+    write_json_file(record_path($missions_dir, $rec), $rec);
+    $changed++;
+    emit_debug("reclassified $rec->{name} (id $rec->{id}): $class");
+  }
+  return $changed;
 }
 
 sub skip_useless {
