@@ -17,8 +17,9 @@ require $script;
 
 our ($noaction, $quiet, $missions_dir, $debug, $copies_goal, $copies_keep, $list_at,
      $client, $empire_name, $essentia_floor, $transmute_cap, $sst_body_id,
+     $current_body_name,
      %buildings_for, %mc_for, %trade_for, %transporter_for, %ports_for, %yards_for,
-     %body_coords);
+     %body_coords, %body_name);
 
 $noaction = 1;
 $quiet    = 1;

@@ -37,6 +37,8 @@ our $lookback_days = 30;
 our $client;
 our $empire_name;
 our $essentia_floor = 20;
+our %body_name;
+our $current_body_name;
 
 our %buildings_for;
 our %mc_for;
@@ -68,9 +70,11 @@ END
 sub emit {
   return if $quiet;
   my $message = shift;
-  my $prefix  = shift // $empire_name // '';
-  print Client::format_time(time()) . " missionary"
-      . ($prefix ne '' ? ": $prefix" : "") . ": $message\n";
+  my $prefix  = shift // '';
+  my @parts = ("missionary");
+  push @parts, $current_body_name if defined($current_body_name) && $current_body_name ne '';
+  push @parts, $prefix if $prefix ne '';
+  print Client::format_time(time()) . " " . join(": ", @parts) . ": $message\n";
 }
 
 sub emit_debug {
@@ -707,6 +711,8 @@ sub resolve_bodies {
     @ids = sort keys %$planets;
   }
   emit("no usable bodies"), return () unless @ids;
+  %body_name = %$planets;
+  $current_body_name = undef;
   my %id_by_name = reverse %$planets;
   for my $colony (@{$status->{bodies}{colonies} || []}) {
     next unless defined($colony->{x}) && defined($colony->{y});
@@ -721,6 +727,7 @@ sub locate_mission_commands {
   my $body_ids = shift;
   my @mcs;
   for my $body_id (@$body_ids) {
+    $current_body_name = $body_name{$body_id} || $body_id;
     my $buildings = eval { $client->body_buildings($body_id) };
     if (my $e = Exception::Class->caught('LacunaRPCException')) {
       emit("$body_id: " . $e->error, "buildings");
@@ -771,8 +778,11 @@ sub vend_and_record {
   }
   for my $id (sort keys %$vended) {
     my $rec = $vended->{$id}{rec};
+    my @planets = map { $body_name{$_->{body_id}} || $_->{body_id} } @{$vended->{$id}{on}};
+    $current_body_name = $planets[0];
     write_json_file(record_path($missions_dir, $rec), $rec);
-    emit("vended: $rec->{name} (id $id) [" . ($rec->{status} || 'active') . "]");
+    emit("vended: $rec->{name} (id $id) [" . ($rec->{status} || 'active') . "] on "
+         . join(", ", @planets));
   }
   return ($vended, \%fresh_by_building);
 }
@@ -781,6 +791,7 @@ sub retire_from_lists {
   my ($vended, $fresh_by_building) = @_;
   my @records = all_records($missions_dir);
   my @retired = retire_missing_instances(\@records, $fresh_by_building, time());
+  $current_body_name = undef;
   for my $rec (@retired) {
     write_json_file(record_path($missions_dir, $rec), $rec);
     emit("retired from lists: $rec->{name} (id $rec->{id}) [$rec->{status_hint}]");
@@ -874,6 +885,7 @@ sub skip_useless {
     my $rewards    = parse_items($entry->{mission}{rewards});
     next unless should_skip('useless', $rewards, $objectives);
     my $on = $entry->{on}[0];
+    $current_body_name = $body_name{$on->{body_id}} || $on->{body_id};
     emit("skipping useless: $rec->{name} (id $rec->{id})");
     if ($noaction) {
       record_action($rec, { action => 'skip', result => 'simulated' });
@@ -1224,8 +1236,9 @@ sub fulfill_missions {
     my $on       = $entry->{on}[0];
     my $anchor   = $on->{body_id};
     my $building = $on->{building_id};
+    $current_body_name = $body_name{$anchor} || $anchor;
     my $objectives = parse_items($entry->{mission}{objectives});
-    emit("fulfilling $rec->{name} (id $rec->{id}) on body $anchor");
+    emit("fulfilling $rec->{name} (id $rec->{id})");
     my $pending = 0;
 
     for my $mv (@{$objectives->{fleet_movement}}) {
@@ -1481,6 +1494,7 @@ sub handle_fleet_shortfall {
 
 sub sst_sales {
   my ($holdings, $listed, $trades_active, $plan_lists) = @_;
+  $current_body_name = $body_name{$sst_body_id} || $sst_body_id;
   my $listed_by_letter = {};
   $listed_by_letter->{lcot_letter($_->{class_name})} += $_->{quantity} || 0 for @$listed;
   my $sellable = sellable_copies($holdings, $listed_by_letter, $copies_keep);
@@ -1549,6 +1563,7 @@ sub sst_sales {
 
 sub summary {
   my $holdings = shift;
+  $current_body_name = undef;
   my @records = all_records($missions_dir);
   my %by_status;
   push @{$by_status{$_->{status} || 'active'}}, $_ for @records;
@@ -1569,6 +1584,7 @@ sub run {
 
 sub offline_report {
   my @records = all_records($missions_dir);
+  $current_body_name = undef;
   return emit("offline: no mission records under $missions_dir yet") unless @records;
   my %by_status;
   push @{$by_status{$_->{status} || 'active'}}, $_ for @records;
@@ -1577,7 +1593,9 @@ sub offline_report {
               join(", ", map { "$_: " . scalar @{$by_status{$_}} } sort keys %by_status)));
   for my $rec (@records) {
     my $letter = $rec->{lcot_letter} ? " plan $rec->{lcot_letter}" : "";
-    emit(sprintf("  [%s] %s (id %s)%s", $rec->{status} || 'active', $rec->{name}, $rec->{id}, $letter));
+    my @planets = map { $body_name{$_} || $_ } keys %{$rec->{seen_on} || {}};
+    emit(sprintf("  [%s] %s (id %s)%s on %s", $rec->{status} || 'active', $rec->{name}, $rec->{id},
+                 $letter, @planets ? join(", ", @planets) : 'unknown planet'));
     for my $action (@{$rec->{actions} || []}) {
       my $eta = $action->{eta} ? " eta $action->{eta}" : "";
       emit(sprintf("    %s %s%s%s", $action->{time} || '?', $action->{action},
