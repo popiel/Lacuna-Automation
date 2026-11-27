@@ -36,6 +36,8 @@ our $lookback_days = 30;
 our $server_mission_dir = "../lacuna_server/mission/missions";
 our $server_lib_dir = "../lacuna_server/server/lib";
 our %glyph_halls_cache;
+our @ore_types;
+our @food_types;
 
 our $client;
 our $empire_name;
@@ -412,8 +414,10 @@ sub classify_rewards {
 }
 
 sub should_skip {
-  my ($class, $rewards, $objectives) = @_;
+  my ($class, $rewards, $objectives, $context) = @_;
   return 0 unless $class eq 'useless';
+  $context ||= {};
+  return 1 if trade_useless($rewards, $objectives, $context);
   my $valuable = @{$rewards->{plans} || []} || @{$rewards->{ships} || []}
               || %{$rewards->{glyphs} || {}} || $rewards->{essentia} || $rewards->{happiness};
   return 0 if $valuable;
@@ -684,9 +688,14 @@ sub online_run {
   my $needed = needed_set_from_vended($vended);
   $essentia_floor = compute_essentia_floor($needed, $essentia_floor_override || 20);
 
-  my @work = classify_vended($vended, $needed, \@outstanding);
-  refresh_classifications($needed, \@outstanding);
-  skip_useless(@work);
+  my $context = {
+    prioritized_consumed => prioritized_consumed_resources($vended),
+    rates                => empire_resource_rates(\@body_ids),
+  };
+
+  my @work = classify_vended($vended, $needed, \@outstanding, $context);
+  refresh_classifications($needed, \@outstanding, $context);
+  skip_useless($context, @work);
   my @todo = grep { ($_->{class} eq 'lcot' || $_->{class} eq 'useful')
                    && ($_->{rec}{status} || 'active') eq 'active' } @work;
   @todo = sort { $a->{rec}{priority} <=> $b->{rec}{priority} } @todo;
@@ -905,17 +914,120 @@ sub lcot_objectives_from_file {
   return $items;
 }
 
-sub lcot_objectives_from_files {
+sub mission_files {
   return () unless -d $server_mission_dir;
-  my @files = (glob(File::Spec->catfile($server_mission_dir, '*.mission')),
-               grep { !/\.mission\z/ } glob(File::Spec->catfile($server_mission_dir, '*.part*')));
+  return (sort glob(File::Spec->catfile($server_mission_dir, '*.mission')),
+          sort grep { !/\.mission\z/ } glob(File::Spec->catfile($server_mission_dir, '*.part*')));
+}
+
+sub lcot_objectives_from_files {
   my @parsed;
-  for my $file (sort @files) {
+  for my $file (mission_files()) {
     my $data = read_mission_file($file) or next;
     next unless file_rewards_lcot($data);
     push @parsed, lcot_objectives_from_file($data);
   }
   return @parsed;
+}
+
+sub load_resource_types {
+  return if @ore_types && @food_types;
+  my $constants = File::Spec->catfile($server_lib_dir, 'Lacuna', 'Constants.pm');
+  return unless -f $constants;
+  open(my $fh, '<', $constants) or return;
+  while (my $line = <$fh>) {
+    if ($line =~ /use constant FOOD_TYPES => \(qw\(([^)]*)\)\)/) {
+      @food_types = split ' ', $1;
+    }
+    elsif ($line =~ /use constant ORE_TYPES => \(qw\(([^)]*)\)\)/) {
+      @ore_types = split ' ', $1;
+    }
+  }
+  close $fh;
+  return;
+}
+
+sub resource_category {
+  my $resource = shift;
+  load_resource_types();
+  return 'water'  if $resource eq 'water';
+  return 'energy' if $resource eq 'energy';
+  return 'waste'  if $resource eq 'waste';
+  return 'ore'    if grep { $_ eq $resource } @ore_types;
+  return 'food'   if grep { $_ eq $resource } @food_types;
+  return;
+}
+
+sub empire_resource_rates {
+  my $body_ids = shift;
+  my %rates = map { $_ => 0 } qw(water energy waste ore food);
+  for my $body_id (@$body_ids) {
+    my $status = eval { $client->body_status($body_id) };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit_debug("body_status failed for $body_id: " . $e->error);
+      next;
+    }
+    die $@ if $@;
+    next unless $status;
+    $rates{water}  += $status->{water_hour}  || 0;
+    $rates{energy} += $status->{energy_hour} || 0;
+    $rates{waste}  += $status->{waste_hour}  || 0;
+    $rates{ore}    += $status->{ore_hour}    || 0;
+    $rates{food}   += $status->{food_hour}   || 0;
+  }
+  return \%rates;
+}
+
+sub trade_useless {
+  my ($rewards, $objectives, $context) = @_;
+  my $wanted = $context->{prioritized_consumed} or return;
+  my $rates  = $context->{rates} or return;
+  return unless %{$objectives->{resources} || {}};
+  my @reward_res = keys %{$rewards->{resources} || {}};
+  return unless @reward_res;
+  return if @{$rewards->{plans} || []} || @{$rewards->{ships} || []}
+         || %{$rewards->{glyphs} || {}} || $rewards->{essentia} || $rewards->{happiness};
+  for my $res (keys %{$objectives->{resources}}) {
+    next unless $wanted->{$res};
+    my $cat = resource_category($res) or next;
+    my $consumed_rate = $rates->{$cat} // 0;
+    for my $reward_res (@reward_res) {
+      my $rcat = resource_category($reward_res) or next;
+      my $reward_rate = $rates->{$rcat} // 0;
+      return "consumes needed $res ($cat at $consumed_rate/h) for $reward_res ($rcat at $reward_rate/h)"
+        if $reward_rate > $consumed_rate;
+    }
+  }
+  return;
+}
+
+sub mission_file_rewards_glyph_halls {
+  my $data = shift;
+  my %keys = glyph_halls_plan_keys();
+  my $plans = ($data->{mission_reward} || {})->{plans} or return 0;
+  for my $plan (@$plans) {
+    return 1 if $keys{plan_class_key($plan->{classname})};
+  }
+  return 0;
+}
+
+sub prioritized_consumed_resources {
+  my $vended = shift;
+  my %consumed;
+  for my $file (mission_files()) {
+    my $data = read_mission_file($file) or next;
+    next unless file_rewards_lcot($data) || mission_file_rewards_glyph_halls($data);
+    my $resources = ($data->{mission_objective} || {})->{resources} || {};
+    $consumed{$_} = 1 for keys %$resources;
+  }
+  for my $entry (values %{$vended || {}}) {
+    my $rewards = parse_items($entry->{mission}{rewards});
+    next unless (grep { lcot_letter($_->{class_name}) } @{$rewards->{plans}})
+             || rewards_glyph_halls($rewards);
+    my $objectives = parse_items($entry->{mission}{objectives});
+    $consumed{$_} = 1 for keys %{$objectives->{resources} || {}};
+  }
+  return \%consumed;
 }
 
 sub glyph_plan_keys {
@@ -995,7 +1107,8 @@ sub needed_set_from_vended {
 }
 
 sub classification_for {
-  my ($rewards, $needed, $outstanding) = @_;
+  my ($rewards, $objectives, $needed, $outstanding, $context) = @_;
+  $context ||= {};
   my ($class, $detail, $reason) = classify_rewards($rewards, $needed);
   my $glyph_halls = rewards_glyph_halls($rewards);
   if ($class eq 'lcot') {
@@ -1004,18 +1117,22 @@ sub classification_for {
   elsif ($glyph_halls) {
     return (useful => 2, "glyph/halls plan $glyph_halls", undef);
   }
+  my $bad_trade = trade_useless($rewards, $objectives, $context);
+  return (useless => 9, "bad trade: $bad_trade", undef) if $bad_trade;
   return ($class => ($class eq 'useful' ? 3 : 9), $reason, undef);
 }
 
 sub classify_vended {
-  my ($vended, $needed, $outstanding) = @_;
+  my ($vended, $needed, $outstanding, $context) = @_;
   my %outstanding = map { $_ => 1 } @$outstanding;
   my @work;
   for my $id (sort keys %$vended) {
-    my $entry   = $vended->{$id};
-    my $rec     = $entry->{rec};
-    my $rewards = parse_items($entry->{mission}{rewards});
-    my ($class, $priority, $reason, $letter) = classification_for($rewards, $needed, \%outstanding);
+    my $entry     = $vended->{$id};
+    my $rec       = $entry->{rec};
+    my $rewards   = parse_items($entry->{mission}{rewards});
+    my $objectives = parse_items($entry->{mission}{objectives});
+    my ($class, $priority, $reason, $letter)
+      = classification_for($rewards, $objectives, $needed, \%outstanding, $context);
     $rec->{classification}         = $class;
     $rec->{classification_reason}  = $reason;
     $rec->{priority}               = $priority;
@@ -1030,13 +1147,15 @@ sub classify_vended {
 }
 
 sub refresh_classifications {
-  my ($needed, $outstanding) = @_;
+  my ($needed, $outstanding, $context) = @_;
   my %outstanding = map { $_ => 1 } @$outstanding;
   my $changed = 0;
   for my $rec (all_records($missions_dir)) {
     next unless $rec->{rewards};
-    my $rewards = parse_items($rec->{rewards});
-    my ($class, $priority, $reason, $letter) = classification_for($rewards, $needed, \%outstanding);
+    my $rewards    = parse_items($rec->{rewards});
+    my $objectives = parse_items($rec->{objectives});
+    my ($class, $priority, $reason, $letter)
+      = classification_for($rewards, $objectives, $needed, \%outstanding, $context);
     next if ($rec->{classification}        // '') eq $class
          && ($rec->{priority}              // -1) == $priority
          && ($rec->{classification_reason} // '') eq $reason;
@@ -1052,13 +1171,14 @@ sub refresh_classifications {
 }
 
 sub skip_useless {
+  my $context = shift;
   my @work = @_;
   for my $entry (@work) {
     next unless $entry->{class} eq 'useless';
     my $rec        = $entry->{rec};
     my $objectives = parse_items($entry->{mission}{objectives});
     my $rewards    = parse_items($entry->{mission}{rewards});
-    next unless should_skip('useless', $rewards, $objectives);
+    next unless should_skip('useless', $rewards, $objectives, $context);
     my $on = $entry->{on}[0];
     $current_body_name = $body_name{$on->{body_id}} || $on->{body_id};
     emit("skipping useless: $rec->{name} (id $rec->{id})");

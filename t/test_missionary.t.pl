@@ -19,6 +19,7 @@ require $script;
 our ($noaction, $quiet, $missions_dir, $debug, $copies_goal, $copies_keep, $list_at,
      $client, $empire_name, $essentia_floor, $transmute_cap, $sst_body_id,
      $current_body_name, $server_mission_dir, $server_lib_dir,
+     @ore_types, @food_types,
      %buildings_for, %mc_for, %trade_for, %transporter_for, %ports_for, %yards_for,
      %body_coords, %body_name, %glyph_halls_cache);
 
@@ -641,14 +642,14 @@ subtest 'online flow with FakeClient' => sub {
   retire_from_lists($vended, $fresh);
 
   my $needed = needed_set_from_vended($vended);
-  my @work = classify_vended($vended, $needed, ['A' .. 'I']);
+  my @work = classify_vended($vended, $needed, ['A' .. 'I'], {});
   my ($lcot_entry) = grep { $_->{rec}{id} == 7 } @work;
   my ($junk_entry) = grep { $_->{rec}{id} == 8 } @work;
   is($lcot_entry->{class}, 'lcot', 'lcot mission classified');
   is($lcot_entry->{rec}{lcot_letter}, 'G', 'lcot letter recorded');
   is($junk_entry->{class}, 'useless', 'junk mission classified');
 
-  skip_useless(@work);
+  skip_useless({}, @work);
   is(scalar $client->calls_for('mission_skip'), 1, 'only the junk mission is skipped');
   my ($skip_call) = $client->calls_for('mission_skip');
   is_deeply([$skip_call->[1], $skip_call->[2]], [100, 8], 'skip via first vending building');
@@ -855,7 +856,7 @@ subtest 'classification priorities' => sub {
     $vended{$id}{rec} = record_instance($missions_dir, $vended{$id}{mission}, 10, 100);
   }
   my $needed = union_needed(parse_items(['10,000 gold']));
-  my @work = classify_vended(\%vended, $needed, ['A' .. 'I']);
+  my @work = classify_vended(\%vended, $needed, ['A' .. 'I'], {});
   my ($lcot)  = grep { $_->{rec}{id} == 1 } @work;
   my ($glyph) = grep { $_->{rec}{id} == 2 } @work;
   my ($plain) = grep { $_->{rec}{id} == 3 } @work;
@@ -900,7 +901,7 @@ subtest 'refresh_classifications' => sub {
   write_json_file(record_path($missions_dir, $lcot_rec), $lcot_rec);
 
   my $needed = union_needed(parse_items(['5,000 magnetite']));
-  my $changed = refresh_classifications($needed, ['A' .. 'I']);
+  my $changed = refresh_classifications($needed, ['A' .. 'I'], {});
   is($changed, 2, 'both stale records reclassified');
 
   $ore_rec = read_json_file(record_path($missions_dir, $ore_rec));
@@ -913,10 +914,158 @@ subtest 'refresh_classifications' => sub {
   is($lcot_rec->{priority}, 0, 'outstanding letter priority');
   is($lcot_rec->{lcot_letter}, 'F', 'letter recorded');
 
-  $changed = refresh_classifications($needed, ['A' .. 'I']);
+  $changed = refresh_classifications($needed, ['A' .. 'I'], {});
   is($changed, 0, 'second pass is a no-op');
 
   $missions_dir = $saved_dir;
+};
+
+sub fake_constants_lib {
+  my $lib = shift;
+  make_path(File::Spec->catfile($lib, 'Lacuna'));
+  open(my $fh, '>', File::Spec->catfile($lib, 'Lacuna', 'Constants.pm')) or die $!;
+  print {$fh} "use constant FOOD_TYPES => (qw(cheese algae));\n";
+  print {$fh} "use constant ORE_TYPES => (qw(magnetite gold));\n";
+  close $fh;
+  return $lib;
+}
+
+subtest 'resource categories and the trade rule' => sub {
+  plan tests => 10;
+  my $saved_lib = $server_lib_dir;
+  my (@saved_ore, @saved_food);
+  $server_lib_dir = fake_constants_lib(tempdir(CLEANUP => 1));
+  @saved_ore  = @ore_types;
+  @saved_food = @food_types;
+  @ore_types  = ();
+  @food_types = ();
+
+  is(resource_category('magnetite'), 'ore',  'ore type categorized');
+  is(resource_category('cheese'),    'food', 'food type categorized');
+  is(resource_category('water'),     'water', 'water categorized');
+  is(resource_category('unobtanium'), undef, 'unknown resource uncategorized');
+
+  my %context = (
+    prioritized_consumed => { water => 1, cheese => 1 },
+    rates => { water => 500, ore => 2000, food => 5000, energy => 0, waste => 0 },
+  );
+
+  ok(trade_useless(parse_items(['45,000 magnetite']), parse_items(['30,000 water']), \%context),
+     'water-for-ore trade is bad when ore outproduces water');
+  ok(!trade_useless(parse_items(['45,000 magnetite']), parse_items(['30,000 water']),
+      { %context, rates => { water => 5000, ore => 200, food => 500, energy => 0, waste => 0 } }),
+     'same trade is fine when water is the faster category');
+  ok(!trade_useless(parse_items(['45,000 magnetite']), parse_items(['30,000 gold']), \%context),
+     'unprioritized consumed resource leaves the rule inert');
+  ok(!trade_useless(
+      parse_items(['45,000 magnetite', '    1 Dory (speed: 1, stealth: 0, hold size: 0, combat: 0, berth: 1)']),
+      parse_items(['30,000 water']), \%context),
+     'ship rewards make it not a pure trade');
+  ok(!trade_useless(parse_items(['5,000 algae']), parse_items(['5,000 cheese']), \%context),
+     'same-category trades are never slower');
+  ok(trade_useless(parse_items(['5,000 cheese']), parse_items(['30,000 water']), \%context),
+     'water-for-food trade is bad when food outproduces water');
+
+  @ore_types  = @saved_ore;
+  @food_types = @saved_food;
+  $server_lib_dir = $saved_lib;
+};
+
+subtest 'prioritized consumed resources' => sub {
+  plan tests => 4;
+  my $saved_missions = $server_mission_dir;
+  my $saved_lib      = $server_lib_dir;
+  my $saved_cache    = \%glyph_halls_cache;
+  $server_mission_dir = tempdir(CLEANUP => 1);
+  $server_lib_dir = fake_server_lib(tempdir(CLEANUP => 1));
+  %glyph_halls_cache = ();
+
+  open(my $fh, '>', File::Spec->catfile($server_mission_dir, 'lcot-water.mission')) or die $!;
+  print {$fh} '{"name":"LCOT Water","mission_objective":{"resources":{"water":25000}},'
+            . '"mission_reward":{"plans":[{"classname":"Lacuna::DB::Result::Building::LCOTd","level":"1","extra_build_level":"0","quantity":1}]}}';
+  close $fh;
+  open($fh, '>', File::Spec->catfile($server_mission_dir, 'grove-cheese.mission')) or die $!;
+  print {$fh} '{"name":"Grove Cheese","mission_objective":{"resources":{"cheese":40000}},'
+            . '"mission_reward":{"plans":[{"classname":"Lacuna::DB::Result::Building::Permanent::Grove","level":"1","extra_build_level":"0","quantity":1}]}}';
+  close $fh;
+  open($fh, '>', File::Spec->catfile($server_mission_dir, 'plain-gold.mission')) or die $!;
+  print {$fh} '{"name":"Plain Gold","mission_objective":{"resources":{"gold":10000}},'
+            . '"mission_reward":{"resources":{"cheese":10}}}';
+  close $fh;
+
+  my $consumed = prioritized_consumed_resources({});
+  ok($consumed->{water},  'LCOT mission resources are prioritized consumption');
+  ok($consumed->{cheese}, 'glyph/halls mission resources are prioritized consumption');
+  ok(!$consumed->{gold},   'plain missions do not mark their resources');
+
+  my %vended = (
+    9 => { mission => { id => 9, name => 'Live LCOT',
+                       objectives => ['1,000 lapis'],
+                       rewards => ['1 Lost City of Tyleon (B) level 1 plan'] } },
+  );
+  $consumed = prioritized_consumed_resources(\%vended);
+  ok($consumed->{lapis}, 'vended LCOT instances add their consumed resources');
+
+  $server_mission_dir = $saved_missions;
+  $server_lib_dir = $saved_lib;
+  %glyph_halls_cache = %$saved_cache;
+};
+
+subtest 'bad trade classifies useless and skips' => sub {
+  plan tests => 8;
+  my $saved_dir      = $missions_dir;
+  my $saved_missions = $server_mission_dir;
+  my $saved_lib      = $server_lib_dir;
+  $missions_dir = tempdir(CLEANUP => 1);
+  $server_mission_dir = tempdir(CLEANUP => 1);
+  $server_lib_dir = fake_constants_lib(fake_server_lib(tempdir(CLEANUP => 1)));
+  @ore_types = ();
+  @food_types = ();
+  %glyph_halls_cache = ();
+
+  my %vended = (
+    7 => { mission => { id => 7, name => 'Buried in Ore',
+                        objectives => ['30,000 water'],
+                        rewards => ['45,000 magnetite'],
+                        max_university_level => 20, description => 'x', date_posted => 'y' },
+           rec => undef, on => [{ body_id => 10, building_id => 100 }] },
+  );
+  $vended{7}{rec} = record_instance($missions_dir, $vended{7}{mission}, 10, 100);
+  my $needed = union_needed(parse_items(['5,000 magnetite']));
+  my $context = {
+    prioritized_consumed => { water => 1 },
+    rates => { water => 500, ore => 2000, food => 5000, energy => 0, waste => 0 },
+  };
+  my @work = classify_vended(\%vended, $needed, ['A' .. 'I'], $context);
+  my ($entry) = @work;
+  is($entry->{class}, 'useless', 'needed-reward trade still useless when it drains a scarcer needed resource');
+  is($entry->{rec}{priority}, 9, 'bad trade never prioritized');
+  like($entry->{rec}{classification_reason}, qr/^bad trade: consumes needed water/,
+       'reason names the trade imbalance');
+
+  ok(should_skip('useless', parse_items(['45,000 magnetite']), parse_items(['30,000 water']), $context),
+     'bad trades are skippable');
+  ok(!should_skip('useless', parse_items(['45,000 magnetite']), parse_items(['30,000 water']),
+      { %$context, rates => { water => 5000, ore => 200, food => 500, energy => 0, waste => 0 } }),
+     'good trades are not skipped');
+
+  my $rec_path = record_path($missions_dir, { name => 'Buried in Ore', id => 7 });
+  my $stale = read_json_file($rec_path);
+  $stale->{classification} = 'useful';
+  $stale->{priority} = 3;
+  $stale->{classification_reason} = 'resource magnetite';
+  write_json_file($rec_path, $stale);
+
+  my $changed = refresh_classifications($needed, ['A' .. 'I'], $context);
+  is($changed, 1, 'record refresh also applies the trade rule');
+  my $rec = read_json_file($rec_path);
+  is($rec->{classification}, 'useless', 'refreshed record is useless');
+  is($rec->{classification_reason}, $entry->{rec}{classification_reason},
+     'refreshed record carries the bad-trade reason');
+
+  $missions_dir = $saved_dir;
+  $server_mission_dir = $saved_missions;
+  $server_lib_dir = $saved_lib;
 };
 
 done_testing();

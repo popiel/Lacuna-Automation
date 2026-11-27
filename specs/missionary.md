@@ -46,6 +46,15 @@ and liquidate the surplus:
   with fulfillment priority 2. Plan classes are matched through the
   normalized class key, so vended display names (e.g. `Beach [2]`) match
   clone classnames (`Permanent::Beach2`).
+- A mission that **trades one resource for another** (rewards are pure
+  resources) is useless - and skippable - when a consumed resource is
+  (a) used by at least one prioritized mission (any LCOT or
+  glyph/halls-rewarding mission, known from the clone files or vended) and
+  (b) generated empire-wide slower than the rewarded resource's category.
+  Generation rates are the summed `*_hour` fields of every colony's
+  `body_status`, compared per category (water/energy/waste/ore/food, with
+  the ore and food type lists parsed from the clone's `Lacuna/Constants.pm`);
+  same-category trades are never flagged.
 - Missions are never presumed gone. An instance's status changes only on
   direct evidence: our own `complete_mission`/`skip_mission` outcome, or a
   fresh `get_missions` list for that Mission Command building in which a
@@ -298,7 +307,9 @@ rewards, 3 = useful, 9 = useless (never fulfilled).
 - useful: rewards contain any item in the needed set (broad: resources and
   happiness count; ship stats must meet or exceed some needed minimum; plan
   levels likewise). Kept with priority 3.
-- useless: nothing in the rewards matches the needed set and the mission
+- useless: a pure resource-for-resource trade whose consumed resource is
+  needed by a prioritized mission and produced slower than the reward's
+  category, OR nothing in the rewards matches the needed set and the mission
   provides nothing of standalone value, or it consumes more than it
   provides. -> `mission_skip` (unless `--noaction`), recorded as an action
   and status change. On RPC failure, report and leave `active`.
