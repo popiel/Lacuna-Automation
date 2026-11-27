@@ -17,7 +17,7 @@ require $script;
 
 our ($noaction, $quiet, $missions_dir, $debug, $copies_goal, $copies_keep, $list_at,
      $client, $empire_name, $essentia_floor, $transmute_cap, $sst_body_id,
-     $current_body_name,
+     $current_body_name, $server_mission_dir,
      %buildings_for, %mc_for, %trade_for, %transporter_for, %ports_for, %yards_for,
      %body_coords, %body_name);
 
@@ -555,7 +555,9 @@ subtest 'online flow with FakeClient' => sub {
   my $saved_dir      = $missions_dir;
   my $saved_noaction = $noaction;
   my $saved_quiet    = $quiet;
+  my $saved_missions = $server_mission_dir;
   $missions_dir = $dir;
+  $server_mission_dir = tempdir(CLEANUP => 1);
   $noaction     = 0;
   $quiet        = 1;
   %mc_for = %trade_for = %transporter_for = ();
@@ -675,8 +677,93 @@ subtest 'online flow with FakeClient' => sub {
   is($rec->{status}, 'completed', 'record marked completed');
 
   $missions_dir = $saved_dir;
+  $server_mission_dir = $saved_missions;
   $noaction     = $saved_noaction;
   $quiet        = $saved_quiet;
+};
+
+subtest 'plan class keys normalize across formats' => sub {
+  plan tests => 5;
+  is(plan_class_key('Halls of Vrbansk'), 'hallsofvrbansk', 'display name');
+  is(plan_class_key('Lacuna::DB::Result::Building::Permanent::HallsOfVrbansk'),
+     'hallsofvrbansk', 'full classname');
+  is(plan_class_key('Interdimensional Rift'), 'interdimensionalrift', 'display name with irregular casing');
+  is(plan_class_key('Lacuna::DB::Result::Building::Permanent::InterDimensionalRift'),
+     'interdimensionalrift', 'classname matches the same key');
+  ok(plan_meets_spec(
+       { class_name => 'Halls of Vrbansk', level => 1, extra => 0 },
+       { class_name => 'Lacuna::DB::Result::Building::Permanent::HallsOfVrbansk', level => 1, extra => 0 },
+     ), 'display-name reward meets classname-file spec');
+};
+
+subtest 'needed set from mission files' => sub {
+  plan tests => 9;
+  my $dir = tempdir(CLEANUP => 1);
+  my $saved = $server_mission_dir;
+  $server_mission_dir = $dir;
+  my $lcot_file = File::Spec->catfile($dir, 'fake-tyleon-food.mission');
+  open(my $fh, '>', $lcot_file) or die $!;
+  print {$fh} <<"END";
+# config-file-type: JSON 1
+{
+   "name" : "Fake Tyleon Food",
+   "max_university_level" : "10",
+   "mission_objective" : {
+      "happiness" : "10000",
+      "essentia" : "10",
+      "resources" : { "lapis" : 1500, "cheese" : "1500" },
+      "glyphs" : [ { "type" : "anthracite", "quantity" : "1" } ],
+      "ships" : [ { "type" : "dory", "quantity" : 3, "speed" : "0",
+                    "stealth" : "0", "hold_size" : "0", "combat" : "0",
+                    "berth_level" : "1", "name" : "" } ],
+      "plans" : [ { "classname" : "Lacuna::DB::Result::Building::Permanent::HallsOfVrbansk",
+                    "level" : "1", "extra_build_level" : "0", "quantity" : 2 } ]
+   },
+   "mission_reward" : {
+      "plans" : [ { "classname" : "Lacuna::DB::Result::Building::LCOTi",
+                    "extra_build_level" : "0", "level" : "1", "quantity" : 1 } ]
+   }
+}
+END
+  close $fh;
+  open($fh, '>', File::Spec->catfile($dir, 'fake-other.mission')) or die $!;
+  print {$fh} "{\"name\":\"Other\",\"mission_objective\":{\"resources\":{\"gold\":9999}},\"mission_reward\":{\"resources\":{\"gold\":10}}}";
+  close $fh;
+  open($fh, '>', File::Spec->catfile($dir, 'fake-tyleon.part2')) or die $!;
+  print {$fh} "{\"name\":\"Fake Part\",\"mission_objective\":{\"resources\":{\"wheat\":40000}},\"mission_reward\":{\"plans\":[{\"classname\":\"Lacuna::DB::Result::Building::LCOTd\",\"level\":\"1\",\"extra_build_level\":\"0\",\"quantity\":1}]}}";
+  close $fh;
+
+  my @parsed = lcot_objectives_from_files();
+  is(scalar @parsed, 2, 'only LCOT-rewarding files contribute (mission and partN)');
+  my $needed = union_needed(@parsed);
+  is($needed->{resources}{lapis},   1500, 'resource quantities numified from strings');
+  is($needed->{resources}{cheese}, 1500, 'resources merged');
+  is($needed->{resources}{gold},  undef, 'non-LCOT file objectives excluded');
+  is($needed->{resources}{wheat}, 40000, 'partN files included');
+  is($needed->{glyphs}{anthracite}, 1, 'glyphs merged');
+  is_deeply($needed->{ships}[0], {
+    type => 'dory', quantity => 3, speed => 0, stealth => 0,
+    hold_size => 0, combat => 0, berth_level => 1,
+  }, 'ship specs normalized');
+
+  my ($class) = classify_rewards(parse_items(['500 lapis']), $needed);
+  is($class, 'useful', 'food rewards match the file-seeded needed set');
+
+  ($class) = classify_rewards(
+    parse_items(['1 Halls of Vrbansk level 1 plan']), $needed);
+  is($class, 'useful', 'display-name plan reward matches a classname-file spec');
+
+  $server_mission_dir = $saved;
+};
+
+subtest 'real clone seeds the needed set' => sub {
+  plan tests => 3;
+  skip 'no local lacuna_server clone', 3 unless -d $server_mission_dir;
+  my @parsed = lcot_objectives_from_files();
+  ok(scalar @parsed >= 25, 'at least 25 known LCOT missions parsed (' . scalar @parsed . ')');
+  my $needed = union_needed(@parsed);
+  ok($needed->{resources}{lapis},   'LCOT food objectives include lapis');
+  ok($needed->{essentia} >= 100, 'LCOT essentia objective raises the floor to at least 110');
 };
 
 done_testing();

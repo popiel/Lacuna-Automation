@@ -24,11 +24,18 @@ and liquidate the surplus:
   LCOT mission is any vended instance whose rewards include a plan whose
   class name starts with `Lost City of Tyleon` (the letter comes from the
   plan class, e.g. `Lost City of Tyleon (A)` / plan_type `LCOTa`).
-- The "needed set" for the broad usefulness test is computed live: the union
-  of the parsed **objective** items of all LCOT instances currently vended,
-  plus LCOT instances recorded on disk within the last 30 days. Missions
-  reward an item appearing in that set (resources and happiness included)
-  are useful; no static table is consulted.
+- The "needed set" for the broad usefulness test is seeded from the known
+  LCOT mission definitions in `../lacuna_server/mission/missions`
+  (`*.mission` and `*.partN` files whose `mission_reward` grants a
+  `Building::LCOTx` plan - their `mission_objective` sections, with plan
+  classnames matched against reward display names through a normalized
+  class key), and extended live by the parsed **objective** items of all
+  LCOT instances currently vended plus LCOT instances recorded on disk
+  within the last 30 days. The files are a baseline, not an authority:
+  live vended LCOT missions add to the set (the server may have
+  additional missions), and classification of a vended mission is always
+  by its own parsed rewards. Missions rewarding an item appearing in that
+  set (resources and happiness included) are useful.
 - Missions are never presumed gone. An instance's status changes only on
   direct evidence: our own `complete_mission`/`skip_mission` outcome, or a
   fresh `get_missions` list for that Mission Command building in which a
@@ -262,8 +269,10 @@ Usage: `./run_perl.sh missionary.pl [--body Name] [--config file]
 - Letters with holdings < `--goal` are outstanding.
 - Needed set = union of parsed objective items (resource names and
   quantities, happiness, essentia, glyph types, ship types with their stat
-  minimums, plan class/level/extra) over all LCOT instances currently
-  vended, plus LCOT instances on disk with `last_seen` within 30 days.
+  minimums, plan class/level/extra) over three sources: the known LCOT
+  mission files in `../lacuna_server/mission/missions` (parsed from their
+  structured `mission_objective` sections), all LCOT instances currently
+  vended, and LCOT instances on disk with `last_seen` within 30 days.
 
 ### 6. Classify
 

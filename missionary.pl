@@ -33,6 +33,7 @@ our $copies_keep = 6;
 our $list_at     = 20;
 our $missions_dir = "missions";
 our $lookback_days = 30;
+our $server_mission_dir = "../lacuna_server/mission/missions";
 
 our $client;
 our $empire_name;
@@ -365,9 +366,17 @@ sub ship_meets_spec {
   return 1;
 }
 
+sub plan_class_key {
+  my $name = shift // '';
+  $name =~ s/.*:://;
+  $name = lc($name);
+  $name =~ s/[^a-z0-9]//g;
+  return $name;
+}
+
 sub plan_meets_spec {
   my ($plan, $spec) = @_;
-  return 0 unless ($plan->{class_name} || '') eq ($spec->{class_name} || '');
+  return 0 unless plan_class_key($plan->{class_name}) eq plan_class_key($spec->{class_name});
   return 0 unless ($plan->{level} || 0) >= ($spec->{level} || 0);
   return 0 unless ($plan->{extra} || 0) >= ($spec->{extra} || 0);
   return 1;
@@ -833,9 +842,82 @@ sub sst_listed_copies {
   return (\@listed, scalar @$trades);
 }
 
+sub read_mission_file {
+  my $path = shift;
+  open(my $fh, '<', $path) or return;
+  my @lines;
+  while (my $line = <$fh>) {
+    next if $line =~ /^\s*#/;
+    push @lines, $line;
+  }
+  close $fh;
+  return eval { JSON::XS->new->decode(join('', @lines)) };
+}
+
+sub file_rewards_lcot {
+  my $data = shift;
+  return 0 unless $data && $data->{mission_reward} && $data->{mission_reward}{plans};
+  for my $plan (@{$data->{mission_reward}{plans}}) {
+    return 1 if ($plan->{classname} || '') =~ /Building::LCOT[a-i]\z/i;
+  }
+  return 0;
+}
+
+sub lcot_objectives_from_file {
+  my $data = shift;
+  my $obj  = ($data || {})->{mission_objective} || {};
+  my $items = {
+    essentia  => ($obj->{essentia}  || 0) + 0,
+    happiness => ($obj->{happiness} || 0) + 0,
+    resources => {},
+    glyphs    => {},
+    ships     => [],
+    plans     => [],
+  };
+  for my $resource (keys %{$obj->{resources} || {}}) {
+    $items->{resources}{$resource} = ($obj->{resources}{$resource} || 0) + 0;
+  }
+  for my $glyph (@{$obj->{glyphs} || []}) {
+    $items->{glyphs}{$glyph->{type}} = ($glyph->{quantity} || 0) + 0;
+  }
+  for my $ship (@{$obj->{ships} || []}) {
+    push @{$items->{ships}}, {
+      type        => $ship->{type},
+      quantity    => ($ship->{quantity} || 1) + 0,
+      speed       => ($ship->{speed} || 0) + 0,
+      stealth     => ($ship->{stealth} || 0) + 0,
+      hold_size   => ($ship->{hold_size} || 0) + 0,
+      combat      => ($ship->{combat} || 0) + 0,
+      berth_level => ($ship->{berth_level} || 0) + 0,
+    };
+  }
+  for my $plan (@{$obj->{plans} || []}) {
+    push @{$items->{plans}}, {
+      class_name => $plan->{classname},
+      level      => ($plan->{level} || 0) + 0,
+      extra      => ($plan->{extra_build_level} || 0) + 0,
+      quantity   => ($plan->{quantity} || 1) + 0,
+    };
+  }
+  return $items;
+}
+
+sub lcot_objectives_from_files {
+  return () unless -d $server_mission_dir;
+  my @files = (glob(File::Spec->catfile($server_mission_dir, '*.mission')),
+               grep { !/\.mission\z/ } glob(File::Spec->catfile($server_mission_dir, '*.part*')));
+  my @parsed;
+  for my $file (sort @files) {
+    my $data = read_mission_file($file) or next;
+    next unless file_rewards_lcot($data);
+    push @parsed, lcot_objectives_from_file($data);
+  }
+  return @parsed;
+}
+
 sub needed_set_from_vended {
   my $vended = shift;
-  my @lcot_parsed;
+  my @lcot_parsed = lcot_objectives_from_files();
   my $cutoff = time() - $lookback_days * 86400;
   for my $entry (values %$vended) {
     my $rewards = parse_items($entry->{mission}{rewards});
