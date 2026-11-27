@@ -34,6 +34,8 @@ our $list_at     = 20;
 our $missions_dir = "missions";
 our $lookback_days = 30;
 our $server_mission_dir = "../lacuna_server/mission/missions";
+our $server_lib_dir = "../lacuna_server/server/lib";
+our %glyph_halls_cache;
 
 our $client;
 our $empire_name;
@@ -915,6 +917,64 @@ sub lcot_objectives_from_files {
   return @parsed;
 }
 
+sub glyph_plan_keys {
+  my $plan_pm = File::Spec->catfile($server_lib_dir, 'Lacuna', 'DB', 'Result', 'Plan.pm');
+  return () unless -f $plan_pm;
+  open(my $fh, '<', $plan_pm) or return ();
+  my @keys;
+  while (my $line = <$fh>) {
+    next if $line =~ /^\s*#/;
+    next unless $line =~ /^\s*'(Lacuna::DB::Result::Building[^']*)'\s*=>/;
+    my $class = $1;
+    $class =~ s/HallsOfVrbansk.*\z/HallsOfVrbansk/;
+    push @keys, plan_class_key($class);
+  }
+  close $fh;
+  return @keys;
+}
+
+sub halls_upgrade_keys {
+  my $building_dir = File::Spec->catfile($server_lib_dir, 'Lacuna', 'DB', 'Result', 'Building');
+  return () unless -d $building_dir;
+  require File::Find;
+  my @keys;
+  File::Find::find(sub {
+    return unless /\.pm\z/;
+    return unless -f $_;
+    open(my $fh, '<', $_) or return;
+    my $found;
+    while (my $line = <$fh>) {
+      if ($line =~ /UpgradeWithHalls/) {
+        $found = 1;
+        last;
+      }
+    }
+    close $fh;
+    return unless $found;
+    (my $rel = $File::Find::name) =~ s/.*Building[\/\\]//;
+    $rel =~ s/\.pm\z//;
+    $rel =~ s/[\/\\]/::/g;
+    push @keys, plan_class_key($rel);
+  }, $building_dir);
+  return @keys;
+}
+
+sub glyph_halls_plan_keys {
+  return %glyph_halls_cache if %glyph_halls_cache;
+  %glyph_halls_cache = map { $_ => 1 } (glyph_plan_keys(), halls_upgrade_keys());
+  return %glyph_halls_cache;
+}
+
+sub rewards_glyph_halls {
+  my $rewards = shift;
+  my %keys = glyph_halls_plan_keys();
+  for my $plan (@{$rewards->{plans} || []}) {
+    my $key = plan_class_key($plan->{class_name});
+    return $plan->{class_name} if $keys{$key};
+  }
+  return;
+}
+
 sub needed_set_from_vended {
   my $vended = shift;
   my @lcot_parsed = lcot_objectives_from_files();
@@ -942,16 +1002,25 @@ sub classify_vended {
     my $rec     = $entry->{rec};
     my $rewards = parse_items($entry->{mission}{rewards});
     my ($class, $detail, $reason) = classify_rewards($rewards, $needed);
-    $rec->{classification}         = $class;
-    $rec->{classification_reason}  = $reason;
+    my $glyph_halls = rewards_glyph_halls($rewards);
     if ($class eq 'lcot') {
-      $rec->{lcot_letter} = $detail;
-      $rec->{priority}    = $outstanding{$detail} ? 0 : 1;
+      $rec->{lcot_letter}         = $detail;
+      $rec->{priority}            = $outstanding{$detail} ? 0 : 1;
+      $rec->{classification}      = 'lcot';
+      $rec->{classification_reason} = $reason;
+    }
+    elsif ($glyph_halls) {
+      $class = 'useful';
+      $rec->{priority}            = 2;
+      $rec->{classification}      = 'useful';
+      $rec->{classification_reason} = "glyph/halls plan $glyph_halls";
     }
     else {
-      $rec->{priority} = 2;
+      $rec->{priority}            = $class eq 'useful' ? 3 : 9;
+      $rec->{classification}      = $class;
+      $rec->{classification_reason} = $reason;
     }
-    $entry->{class} = $class;
+    $entry->{class} = $rec->{classification};
     push @work, $entry;
     write_json_file(record_path($missions_dir, $rec), $rec);
   }

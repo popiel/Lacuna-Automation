@@ -36,6 +36,16 @@ and liquidate the surplus:
   additional missions), and classification of a vended mission is always
   by its own parsed rewards. Missions rewarding an item appearing in that
   set (resources and happiness included) are useful.
+- Missions rewarding **glyph-building plans and/or plans of buildings
+  upgraded with Halls** get their own priority tier, one step below LCOT:
+  the qualifying classes are derived from the server clone - the glyph
+  recipe keys in `server/lib/Lacuna/DB/Result/Plan.pm` (Halls of Vrbansk
+  recipe variants normalize to `HallsOfVrbansk`) and every building class
+  consuming `Lacuna::Role::Building::UpgradeWithHalls`. Any reward plan in
+  those sets makes the mission useful (even without a needed-set match)
+  with fulfillment priority 2. Plan classes are matched through the
+  normalized class key, so vended display names (e.g. `Beach [2]`) match
+  clone classnames (`Permanent::Beach2`).
 - Missions are never presumed gone. An instance's status changes only on
   direct evidence: our own `complete_mission`/`skip_mission` outcome, or a
   fresh `get_missions` list for that Mission Command building in which a
@@ -276,13 +286,18 @@ Usage: `./run_perl.sh missionary.pl [--body Name] [--config file]
 
 ### 6. Classify
 
+Fulfillment priority: 0 = lcot (outstanding letters first, then
+surplus-building), 1 = lcot for letters at `--goal`, 2 = glyph/halls-plan
+rewards, 3 = useful, 9 = useless (never fulfilled).
+
 - lcot: rewards include a `Lost City of Tyleon` plan. Never skipped. Record
-  the letter. Priority: letters outstanding first, then surplus-building
-  LCOT missions.
+  the letter.
+- glyph/halls: rewards include a plan whose class is a glyph building
+  (Plan.pm recipes) or a Halls-upgradable building (UpgradeWithHalls
+  consumers). Kept as useful with priority 2 regardless of the needed set.
 - useful: rewards contain any item in the needed set (broad: resources and
   happiness count; ship stats must meet or exceed some needed minimum; plan
-  levels likewise). Kept and scheduled for fulfillment by nearness to
-  completion.
+  levels likewise). Kept with priority 3.
 - useless: nothing in the rewards matches the needed set and the mission
   provides nothing of standalone value, or it consumes more than it
   provides. -> `mission_skip` (unless `--noaction`), recorded as an action

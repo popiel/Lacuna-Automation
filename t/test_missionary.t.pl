@@ -3,6 +3,7 @@ use warnings;
 
 use Test::More;
 use File::Basename qw(dirname);
+use File::Path qw(make_path);
 use File::Spec;
 use Cwd qw(abs_path);
 use File::Temp qw(tempdir);
@@ -17,9 +18,9 @@ require $script;
 
 our ($noaction, $quiet, $missions_dir, $debug, $copies_goal, $copies_keep, $list_at,
      $client, $empire_name, $essentia_floor, $transmute_cap, $sst_body_id,
-     $current_body_name, $server_mission_dir,
+     $current_body_name, $server_mission_dir, $server_lib_dir,
      %buildings_for, %mc_for, %trade_for, %transporter_for, %ports_for, %yards_for,
-     %body_coords, %body_name);
+     %body_coords, %body_name, %glyph_halls_cache);
 
 $noaction = 1;
 $quiet    = 1;
@@ -764,6 +765,116 @@ subtest 'real clone seeds the needed set' => sub {
   my $needed = union_needed(@parsed);
   ok($needed->{resources}{lapis},   'LCOT food objectives include lapis');
   ok($needed->{essentia} >= 100, 'LCOT essentia objective raises the floor to at least 110');
+};
+
+sub fake_server_lib {
+  my $lib = shift;
+  my $result_dir = File::Spec->catfile($lib, 'Lacuna', 'DB', 'Result');
+  make_path($result_dir, File::Spec->catfile($result_dir, 'Building', 'Permanent'));
+  open(my $fh, '>', File::Spec->catfile($result_dir, 'Plan.pm')) or die $!;
+  print {$fh} <<"END";
+package Lacuna::DB::Result::Plan;
+my \$recipes = {
+    'Lacuna::DB::Result::Building::Permanent::Grove'              => [qw(methane)],
+    'Lacuna::DB::Result::Building::Permanent::HallsOfVrbansk A'  => [qw(goethite halite gypsum trona)],
+#    'Lacuna::DB::Result::Building::Permanent::CommentedOut'      => [qw(bauxite)],
+    'Lacuna::DB::Result::Building::Permanent::Sand'               => [qw(bauxite)],
+};
+END
+  close $fh;
+  open($fh, '>', File::Spec->catfile($result_dir, 'Building', 'Permanent', 'FakeMeadow.pm')) or die $!;
+  print {$fh} "with 'Lacuna::Role::Building::UpgradeWithHalls';\n";
+  close $fh;
+  open($fh, '>', File::Spec->catfile($result_dir, 'Building', 'Permanent', 'FakeOther.pm')) or die $!;
+  print {$fh} "use Moose;\n";
+  close $fh;
+  return $lib;
+}
+
+subtest 'glyph and halls plan keys' => sub {
+  plan tests => 8;
+  my $saved_lib   = $server_lib_dir;
+  my $saved_cache = \%glyph_halls_cache;
+  $server_lib_dir = fake_server_lib(tempdir(CLEANUP => 1));
+  %glyph_halls_cache = ();
+
+  my %keys = glyph_halls_plan_keys();
+  ok($keys{grove},            'glyph recipe classes are included');
+  ok($keys{hallsofvrbansk},   'HallsOfVrbansk recipe variants normalize to one key');
+  ok($keys{fakemeadow},       'UpgradeWithHalls consumers are included');
+  ok($keys{fakeother} // 0 == 0, 'plain buildings are not included');
+  is($keys{commentedout}, undef, 'commented-out recipes are skipped');
+
+  my $hit = rewards_glyph_halls(parse_items(['1 Grove level 1 plan']));
+  is($hit, 'Grove', 'display-name reward matched by normalized key');
+
+  $hit = rewards_glyph_halls(parse_items(['1 Halls of Vrbansk level 1 plan']));
+  is($hit, 'Halls of Vrbansk', 'Halls plans themselves qualify');
+
+  $hit = rewards_glyph_halls(parse_items(['1 Lapis Pie Bakery level 1+4 plan']));
+  is($hit, undef, 'unknown plan classes do not qualify');
+
+  %glyph_halls_cache = %$saved_cache;
+  $server_lib_dir = $saved_lib;
+};
+
+subtest 'classification priorities' => sub {
+  plan tests => 9;
+  my $saved_dir     = $missions_dir;
+  my $saved_lib     = $server_lib_dir;
+  my $saved_missions = $server_mission_dir;
+  my $saved_cache   = \%glyph_halls_cache;
+  $missions_dir = tempdir(CLEANUP => 1);
+  $server_lib_dir = fake_server_lib(tempdir(CLEANUP => 1));
+  $server_mission_dir = tempdir(CLEANUP => 1);
+  %glyph_halls_cache = ();
+
+  my %vended = (
+    1 => { mission => { id => 1, name => 'LCOT One',
+                        objectives => [], rewards => ['1 Lost City of Tyleon (A) level 1 plan'] },
+           rec => { id => 1, name => 'LCOT One', status => 'active',
+                    actions => [], seen_on => {} },
+           on => [{ body_id => 10, building_id => 100 }] },
+    2 => { mission => { id => 2, name => 'Glyph Two',
+                        objectives => [], rewards => ['1 Grove level 1 plan'] },
+           rec => { id => 2, name => 'Glyph Two', status => 'active',
+                    actions => [], seen_on => {} },
+           on => [{ body_id => 10, building_id => 100 }] },
+    3 => { mission => { id => 3, name => 'Plain Three',
+                        objectives => [], rewards => ['5,000 gold'] },
+           rec => { id => 3, name => 'Plain Three', status => 'active',
+                    actions => [], seen_on => {} },
+           on => [{ body_id => 10, building_id => 100 }] },
+    4 => { mission => { id => 4, name => 'Junk Four',
+                        objectives => ['5,000 gold'], rewards => [] },
+           rec => { id => 4, name => 'Junk Four', status => 'active',
+                    actions => [], seen_on => {} },
+           on => [{ body_id => 10, building_id => 100 }] },
+  );
+  for my $id (keys %vended) {
+    $vended{$id}{rec} = record_instance($missions_dir, $vended{$id}{mission}, 10, 100);
+  }
+  my $needed = union_needed(parse_items(['10,000 gold']));
+  my @work = classify_vended(\%vended, $needed, ['A' .. 'I']);
+  my ($lcot)  = grep { $_->{rec}{id} == 1 } @work;
+  my ($glyph) = grep { $_->{rec}{id} == 2 } @work;
+  my ($plain) = grep { $_->{rec}{id} == 3 } @work;
+  my ($junk)  = grep { $_->{rec}{id} == 4 } @work;
+
+  is($lcot->{rec}{priority}, 0, 'outstanding LCOT is top priority');
+  is($lcot->{class}, 'lcot', 'LCOT class');
+  is($glyph->{rec}{priority}, 2, 'glyph/halls plan rewards sit one step below LCOT');
+  is($glyph->{class}, 'useful', 'glyph/halls mission is kept as useful');
+  like($glyph->{rec}{classification_reason}, qr/^glyph\/halls plan Grove/, 'reason names the plan');
+  is($plain->{rec}{priority}, 3, 'plain useful missions come last');
+  is($plain->{class}, 'useful', 'plain useful class');
+  is($junk->{class}, 'useless', 'junk stays useless');
+  is($junk->{rec}{priority}, 9, 'useless missions are never prioritized');
+
+  $missions_dir = $saved_dir;
+  $server_lib_dir = $saved_lib;
+  $server_mission_dir = $saved_missions;
+  %glyph_halls_cache = %$saved_cache;
 };
 
 done_testing();
