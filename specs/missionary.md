@@ -55,6 +55,19 @@ and liquidate the surplus:
   `body_status`, compared per category (water/energy/waste/ore/food, with
   the ore and food type lists parsed from the clone's `Lacuna/Constants.pm`);
   same-category trades are never flagged.
+- A mission that **trades resources for ships** (rewards contain ships and
+  no plans/glyphs/essentia/happiness; resource rewards allowed and
+  credited) is useless - and skippable - when both hold: (a) the
+  objectives' resource **accumulation time** (per-category production
+  rates) exceeds the accumulation time of building the same ships at my
+  best shipyards (live `shipyard/get_buildable` costs, cheapest
+  buildable yard) **plus** the reward resources' accumulation time; and
+  (b) no rewarded ship carries a stat that prioritized missions need and
+  no buildable yard produces (per-stat maximum over `can`-yards'
+  level-adjusted `attributes`). Types not buildable at any `can`-yard
+  (mission/exchange-only ships, or transiently dock-blocked yards) keep
+  their value and the rule stays inert. Zero-rate categories are
+  infinite on the pay side and skipped on the get side.
 - Missions are never presumed gone. An instance's status changes only on
   direct evidence: our own `complete_mission`/`skip_mission` outcome, or a
   fresh `get_missions` list for that Mission Command building in which a
@@ -307,12 +320,12 @@ rewards, 3 = useful, 9 = useless (never fulfilled).
 - useful: rewards contain any item in the needed set (broad: resources and
   happiness count; ship stats must meet or exceed some needed minimum; plan
   levels likewise). Kept with priority 3.
-- useless: a pure resource-for-resource trade whose consumed resource is
-  needed by a prioritized mission and produced slower than the reward's
-  category, OR nothing in the rewards matches the needed set and the mission
-  provides nothing of standalone value, or it consumes more than it
-  provides. -> `mission_skip` (unless `--noaction`), recorded as an action
-  and status change. On RPC failure, report and leave `active`.
+- useless: a resource-for-resource trade draining a scarcer needed
+  resource, OR a ship trade costlier than building the ships without a
+  unique necessary stat, OR nothing in the rewards matches the needed set
+  and the mission provides nothing of standalone value, or it consumes more
+  than it provides. -> `mission_skip` (unless `--noaction`), recorded as an
+  action and status change. On RPC failure, report and leave `active`.
 
 After classifying the vended missions, every record on disk (including
 retired ones) is re-classified against the current needed set and

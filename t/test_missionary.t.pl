@@ -1016,6 +1016,9 @@ subtest 'bad trade classifies useless and skips' => sub {
   my $saved_dir      = $missions_dir;
   my $saved_missions = $server_mission_dir;
   my $saved_lib      = $server_lib_dir;
+  my (@saved_ore, @saved_food);
+  @saved_ore  = @ore_types;
+  @saved_food = @food_types;
   $missions_dir = tempdir(CLEANUP => 1);
   $server_mission_dir = tempdir(CLEANUP => 1);
   $server_lib_dir = fake_constants_lib(fake_server_lib(tempdir(CLEANUP => 1)));
@@ -1066,6 +1069,164 @@ subtest 'bad trade classifies useless and skips' => sub {
   $missions_dir = $saved_dir;
   $server_mission_dir = $saved_missions;
   $server_lib_dir = $saved_lib;
+  @ore_types  = @saved_ore;
+  @food_types = @saved_food;
+};
+
+subtest 'accumulation time' => sub {
+  plan tests => 6;
+  my $rates = { water => 500, ore => 2000, food => 5000, energy => 1000, waste => 500 };
+  is(accumulation_time({ gold => 10000 }, $rates), 5, 'ore accumulation in hours');
+  is(accumulation_time({ cheese => 5000, gold => 2000 }, $rates), 2, 'categories sum');
+  is(accumulation_time({ food => 350, ore => 5500, water => 700 }, $rates),
+     350/5000 + 2.75 + 1.4, 'cost-hash category keys accepted');
+  is(accumulation_time({ unobtanium => 1000 }, $rates, 'skip'), 0, 'unknown resource skipped');
+  is(accumulation_time({ gold => 1000 }, { %$rates, ore => 0 }, 'inf'), 9e9,
+     'zero-rate category is infinite on the pay side');
+  is(accumulation_time({ gold => 1000 }, { %$rates, ore => 0 }, 'skip'), 0,
+     'zero-rate category skipped on the get side');
+};
+
+subtest 'ship trade rule' => sub {
+  plan tests => 12;
+  my (@saved_ore, @saved_food);
+  @saved_ore  = @ore_types;
+  @saved_food = @food_types;
+  @ore_types  = ();
+  @food_types = ();
+  my $rates = { water => 500, ore => 2000, food => 5000, energy => 1000, waste => 500 };
+  my $dory_build = 350/5000 + 700/500 + 3250/1000 + 5500/2000 + 400/500;
+  my $yards = {
+    dory => { buildable => 2,
+              attributes => { speed => 1250, stealth => 4100, hold_size => 400,
+                              combat => 0, berth_level => 1 },
+              build_time => $dory_build },
+  };
+  my $specs = {
+    dory => [ { type => 'dory', quantity => 1, speed => 0, stealth => 0,
+                hold_size => 2000, combat => 0, berth_level => 1 } ],
+  };
+  my %context = ( prioritized_ship_specs => $specs, rates => $rates, yard_buildable => $yards );
+
+  my $rock_out_rewards = parse_items([
+    '    1 Dory (speed: 3,500, stealth: 2,150, hold size: 5,000, combat: 0, berth: 1)']);
+  my $rock_out_objectives = parse_items([
+    '10,000 bauxite', '5,000 gold', '10,000 goethite', '5,000 chromite']);
+  ok(!ship_trade_useless($rock_out_rewards, $rock_out_objectives, \%context),
+     'ROCK OUT kept: 5000-hold dory is unique against 400-hold yards');
+
+  my $generous_yards = {
+    dory => { buildable => 2,
+              attributes => { speed => 3900, stealth => 4400, hold_size => 3000,
+                              combat => 0, berth_level => 1 },
+              build_time => $dory_build },
+  };
+  my %beatable = (%context, yard_buildable => $generous_yards);
+  like(ship_trade_useless($rock_out_rewards, $rock_out_objectives, \%beatable),
+       qr/^pays 15\.0h/,
+       'same trade useless when yards already build better dories');
+
+  ok(!ship_trade_useless($rock_out_rewards, parse_items(['100 gold']), \%beatable),
+     'cheap missions are fine even without unique stats');
+
+  my $snark_rewards = parse_items([
+    '    1 Snark (speed: 3,500, stealth: 2,150, hold size: 0, combat: 0, berth: 1)']);
+  ok(!ship_trade_useless($snark_rewards, $rock_out_objectives, \%beatable),
+     'unbuildable ship types keep their exchange value');
+
+  my $mixed_rewards = parse_items([
+    '    1 Dory (speed: 3,500, stealth: 2,150, hold size: 5,000, combat: 0, berth: 1)',
+    '10,000 cheese']);
+  ok(!ship_trade_useless($mixed_rewards, parse_items(['20,000 bauxite']), \%beatable),
+     'reward resources are credited on the get side');
+
+  ok(ship_trade_useless($rock_out_rewards, $rock_out_objectives, \%beatable),
+     'no credit without resource rewards');
+
+  my $plan_rewards = parse_items([
+    '    1 Dory (speed: 3,500, stealth: 2,150, hold size: 5,000, combat: 0, berth: 1)',
+    '1 Halls of Vrbansk level 1 plan']);
+  ok(!ship_trade_useless($plan_rewards, $rock_out_objectives, \%beatable),
+     'plan rewards make the rule inert');
+
+  ok(ship_trade_useless($rock_out_rewards, $rock_out_objectives,
+      { %beatable, prioritized_ship_specs => {} }),
+     'no prioritized specs means no rescue, only the cost comparison');
+
+  my ($class, $priority, $reason)
+    = classification_for($rock_out_rewards, $rock_out_objectives, union_needed(), {}, \%beatable);
+  is($class, 'useless', 'bad ship trade classifies useless');
+  is($priority, 9, 'bad ship trade never prioritized');
+  like($reason, qr/^bad trade: pays 15\.0h/, 'reason carries the accounting');
+
+  ok(should_skip('useless', $rock_out_rewards, $rock_out_objectives, \%beatable),
+     'bad ship trades are skippable');
+
+  @ore_types  = @saved_ore;
+  @food_types = @saved_food;
+};
+
+subtest 'yard buildable data' => sub {
+  plan tests => 4;
+  my $rates = { water => 500, ore => 2000, food => 5000, energy => 1000, waste => 500 };
+  my $saved_client = $client;
+  $client = FakeClient->new(
+    buildings => {},
+    responses => {
+      yard_buildable => sub {
+        my ($self, $yard_id) = @_;
+        return { buildable => {
+          $yard_id == 1
+          ? (dory => { can => 1,
+                       attributes => { speed => 1250, stealth => 4100, hold_size => 400,
+                                       combat => 0, berth_level => 1 },
+                       cost => { food => 350, water => 700, energy => 3250, ore => 5500, waste => 400 } })
+          : (dory => { can => 0 }, scow => { can => 1,
+                       attributes => { speed => 100, stealth => 0, hold_size => 1000,
+                                       combat => 0, berth_level => 1 },
+                       cost => { food => 310, water => 580, energy => 1600, ore => 5200, waste => 400 } }),
+        } };
+      },
+    },
+  );
+  my $data = yard_buildable_data([1, 2], $rates);
+  is($data->{dory}{buildable}, 1, 'only can-yards count');
+  is($data->{dory}{attributes}{hold_size}, 400, 'attributes from the buildable yard');
+  ok(abs($data->{dory}{build_time} - (350/5000 + 700/500 + 3250/1000 + 5500/2000 + 400/500)) < 1e-9,
+     'build time is the accumulated cost');
+  is($data->{scow}{buildable}, 1, 'second yard contributes its own types');
+  $client = $saved_client;
+};
+
+subtest 'prioritized ship specs' => sub {
+  plan tests => 4;
+  my $saved_missions = $server_mission_dir;
+  my $saved_lib      = $server_lib_dir;
+  my $saved_cache    = \%glyph_halls_cache;
+  $server_mission_dir = tempdir(CLEANUP => 1);
+  $server_lib_dir = fake_server_lib(tempdir(CLEANUP => 1));
+  %glyph_halls_cache = ();
+
+  open(my $fh, '>', File::Spec->catfile($server_mission_dir, 'jazz.mission')) or die $!;
+  print {$fh} '{"name":"Jazz","mission_objective":{"ships":[{"type":"dory","quantity":1,"hold_size":2000,'
+            . '"speed":"100","stealth":"0","combat":"0","berth_level":"1"}]},'
+            . '"mission_reward":{"plans":[{"classname":"Lacuna::DB::Result::Building::LCOTg","level":"1","extra_build_level":"0","quantity":1}]}}';
+  close $fh;
+  open($fh, '>', File::Spec->catfile($server_mission_dir, 'scowy.mission')) or die $!;
+  print {$fh} '{"name":"Scowy","mission_objective":{"ships":[{"type":"scow","quantity":2,"hold_size":150000,'
+            . '"speed":"1","stealth":"0","combat":"0","berth_level":"1"}]},'
+            . '"mission_reward":{"plans":[{"classname":"Lacuna::DB::Result::Building::Permanent::Grove","level":"1","extra_build_level":"0","quantity":1}]}}';
+  close $fh;
+
+  my $specs = prioritized_ship_specs({});
+  is($specs->{dory}[0]{hold_size}, 2000, 'LCOT mission ship specs collected');
+  is($specs->{scow}[0]{hold_size}, 150000, 'glyph/halls mission ship specs collected');
+  is($specs->{dory}[0]{speed}, 100, 'string stats numified');
+  is(scalar keys %$specs, 2, 'types keyed');
+
+  $server_mission_dir = $saved_missions;
+  $server_lib_dir = $saved_lib;
+  %glyph_halls_cache = %$saved_cache;
 };
 
 done_testing();

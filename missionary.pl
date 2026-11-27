@@ -418,6 +418,7 @@ sub should_skip {
   return 0 unless $class eq 'useless';
   $context ||= {};
   return 1 if trade_useless($rewards, $objectives, $context);
+  return 1 if ship_trade_useless($rewards, $objectives, $context);
   my $valuable = @{$rewards->{plans} || []} || @{$rewards->{ships} || []}
               || %{$rewards->{glyphs} || {}} || $rewards->{essentia} || $rewards->{happiness};
   return 0 if $valuable;
@@ -665,7 +666,7 @@ sub choose_rename_plan {
 sub online_run {
   my $status = eval { connect_client() };
   if (my $e = Exception::Class->caught('LacunaRPCException')) {
-    emit($e->error, "rpc error");
+    emit("$e", "rpc error");
     return;
   }
   die $@ if $@;
@@ -688,9 +689,14 @@ sub online_run {
   my $needed = needed_set_from_vended($vended);
   $essentia_floor = compute_essentia_floor($needed, $essentia_floor_override || 20);
 
+  my $prioritized = prioritized_objectives($vended);
+  my $rates = empire_resource_rates(\@body_ids);
+  my @yard_ids = map { @{$_ || []} } values %yards_for;
   my $context = {
-    prioritized_consumed => prioritized_consumed_resources($vended),
-    rates                => empire_resource_rates(\@body_ids),
+    prioritized_consumed  => $prioritized->{resources},
+    prioritized_ship_specs => $prioritized->{ships},
+    rates                 => $rates,
+    yard_buildable        => yard_buildable_data(\@yard_ids, $rates),
   };
 
   my @work = classify_vended($vended, $needed, \@outstanding, $context);
@@ -1011,14 +1017,32 @@ sub mission_file_rewards_glyph_halls {
   return 0;
 }
 
-sub prioritized_consumed_resources {
+sub file_ship_specs {
+  my $obj = shift;
+  my @specs;
+  for my $ship (@{$obj->{ships} || []}) {
+    push @specs, {
+      type        => $ship->{type},
+      quantity    => ($ship->{quantity} || 1) + 0,
+      speed       => ($ship->{speed} || 0) + 0,
+      stealth     => ($ship->{stealth} || 0) + 0,
+      hold_size   => ($ship->{hold_size} || 0) + 0,
+      combat      => ($ship->{combat} || 0) + 0,
+      berth_level => ($ship->{berth_level} || 0) + 0,
+    };
+  }
+  return @specs;
+}
+
+sub prioritized_objectives {
   my $vended = shift;
-  my %consumed;
+  my (%consumed, %specs);
   for my $file (mission_files()) {
     my $data = read_mission_file($file) or next;
     next unless file_rewards_lcot($data) || mission_file_rewards_glyph_halls($data);
-    my $resources = ($data->{mission_objective} || {})->{resources} || {};
-    $consumed{$_} = 1 for keys %$resources;
+    my $obj = $data->{mission_objective} || {};
+    $consumed{$_} = 1 for keys %{$obj->{resources} || {}};
+    push @{$specs{$_->{type}}}, $_ for file_ship_specs($obj);
   }
   for my $entry (values %{$vended || {}}) {
     my $rewards = parse_items($entry->{mission}{rewards});
@@ -1026,8 +1050,91 @@ sub prioritized_consumed_resources {
              || rewards_glyph_halls($rewards);
     my $objectives = parse_items($entry->{mission}{objectives});
     $consumed{$_} = 1 for keys %{$objectives->{resources} || {}};
+    push @{$specs{$_->{type}}}, $_ for @{$objectives->{ships} || []};
   }
-  return \%consumed;
+  return { resources => \%consumed, ships => \%specs };
+}
+
+sub prioritized_consumed_resources {
+  return prioritized_objectives($_[0])->{resources};
+}
+
+sub prioritized_ship_specs {
+  return prioritized_objectives($_[0])->{ships};
+}
+
+sub accumulation_time {
+  my ($resources, $rates, $missing_rate) = @_;
+  my $total = 0;
+  for my $res (keys %{$resources || {}}) {
+    my $cat = resource_category($res);
+    if (!defined $cat && grep { $res eq $_ } qw(water energy waste ore food)) {
+      $cat = $res;
+    }
+    next unless defined $cat;
+    my $rate = $rates->{$cat} || 0;
+    if ($rate <= 0) {
+      return 9e9 if ($missing_rate // 'inf') eq 'inf';
+      next;
+    }
+    $total += $resources->{$res} / $rate;
+  }
+  return $total;
+}
+
+sub yard_buildable_data {
+  my ($yard_ids, $rates) = @_;
+  my %data;
+  for my $yard_id (@{$yard_ids || []}) {
+    my $yb = eval { $client->yard_buildable($yard_id) };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      emit_debug("yard_buildable failed for $yard_id: " . $e->error);
+      next;
+    }
+    die $@ if $@;
+    next unless $yb && $yb->{buildable};
+    for my $type (keys %{$yb->{buildable}}) {
+      my $entry = $yb->{buildable}{$type};
+      next unless $entry->{can};
+      my $d = $data{$type} ||= { buildable => 0, attributes => {}, build_time => undef };
+      $d->{buildable}++;
+      for my $stat (qw(speed stealth hold_size combat berth_level)) {
+        my $value = $entry->{attributes}{$stat} // 0;
+        $d->{attributes}{$stat} = $value
+          if !defined($d->{attributes}{$stat}) || $value > $d->{attributes}{$stat};
+      }
+      my $cost_time = accumulation_time($entry->{cost}, $rates, 'skip');
+      $d->{build_time} = $cost_time
+        if !defined($d->{build_time}) || $cost_time < $d->{build_time};
+    }
+  }
+  return \%data;
+}
+
+sub ship_trade_useless {
+  my ($rewards, $objectives, $context) = @_;
+  my $specs = $context->{prioritized_ship_specs} or return;
+  my $rates = $context->{rates} or return;
+  my $yards = $context->{yard_buildable} or return;
+  return unless @{$rewards->{ships} || []};
+  return if @{$rewards->{plans} || []} || %{$rewards->{glyphs} || {}}
+         || $rewards->{essentia} || $rewards->{happiness};
+  my $pay = accumulation_time($objectives->{resources}, $rates, 'inf');
+  my $get = accumulation_time($rewards->{resources}, $rates, 'skip');
+  for my $ship (@{$rewards->{ships}}) {
+    my $yard = $yards->{$ship->{type}};
+    return unless $yard && $yard->{buildable};
+    for my $spec (@{$specs->{$ship->{type}} || []}) {
+      for my $stat (qw(speed stealth hold_size combat berth_level)) {
+        return if ($yard->{attributes}{$stat} || 0) < ($spec->{$stat} || 0)
+               && ($ship->{$stat} || 0) >= ($spec->{$stat} || 0);
+      }
+    }
+    $get += ($yard->{build_time} // 9e9) * ($ship->{quantity} || 1);
+  }
+  return sprintf("pays %.1fh of accumulation for ships and resources worth %.1fh", $pay, $get)
+    if $pay > $get;
+  return;
 }
 
 sub glyph_plan_keys {
@@ -1052,6 +1159,7 @@ sub halls_upgrade_keys {
   require File::Find;
   my @keys;
   File::Find::find(sub {
+    no warnings qw(once);
     return unless /\.pm\z/;
     return unless -f $_;
     open(my $fh, '<', $_) or return;
@@ -1119,6 +1227,8 @@ sub classification_for {
   }
   my $bad_trade = trade_useless($rewards, $objectives, $context);
   return (useless => 9, "bad trade: $bad_trade", undef) if $bad_trade;
+  my $bad_ship_trade = ship_trade_useless($rewards, $objectives, $context);
+  return (useless => 9, "bad trade: $bad_ship_trade", undef) if $bad_ship_trade;
   return ($class => ($class eq 'useful' ? 3 : 9), $reason, undef);
 }
 
