@@ -206,7 +206,7 @@ Parsing rules:
 
 Usage: `./run_perl.sh missionary.pl [--body Name] [--config file]
 [--noaction|-n] [--debug] [--quiet] [--transmute N] [--essentia-floor N]
-[--goal N] [--keep N] [--list-at F]`
+[--goal N] [--keep N] [--list-at F] [--stored-ttl N]`
 
 - `--body` / `-b`: repeatable. Restrict to named colonies (resolved with
   `Client::match_planet`). Default: all colonies.
@@ -231,6 +231,8 @@ Usage: `./run_perl.sh missionary.pl [--body Name] [--config file]
 - `--goal`: copies per LCOT letter to accumulate. Default 9.
 - `--keep`: copies per letter retained before selling surplus. Default 6.
 - `--list-at`: SST ask price per surplus plan copy. Default 20.
+- `--stored-ttl`: minutes to trust cached stored-resource snapshots
+  (`Client::trade_stored_resources`). Default 30.
 
 ## Flow
 
@@ -351,14 +353,19 @@ objectives into structured needs and satisfy what can be satisfied:
 - Happiness: compare the anchor body's happiness (current or
   `estimated_body_status`). Cannot be hauled; report shortfalls, keep the
   mission.
-- Resources: compare anchor body stores. For each shortfall, haul from the
-  colony with the most surplus via `trade_push` (plan repeated trips as
-  holds allow; compare the trade ship's arrival ETA against the posting's
-  optimistic expiry `first_seen + 72h`, since `date_posted` is a game
-  calendar string that is not parsed). If no trade ship can arrive in time
-  and the anchor body holds a surplus of another resource: one
-  `transporter/trade_one_for_one` on the SST anchor's transporter, within
-  `--transmute` and the essentia floor. Otherwise report the shortfall.
+- Resources: compare anchor body stores (`Client::trade_stored_resources`).
+  For each shortfall, haul from the colony with the most surplus via
+  `trade_push` on a hauler selected from the cached ship lists (biggest
+  docked CargoExchange-capable hold; the zero-RPC aggregate gate skips
+  source bodies whose category total cannot cover the shortfall; plan
+  repeated trips as holds allow; compare the ship's arrival ETA against
+  the posting's optimistic expiry `first_seen + 72h`, since `date_posted`
+  is a game calendar string that is not parsed). If no trade ship can
+  arrive in time and the anchor body holds a surplus of another resource:
+  one `transporter/trade_one_for_one` on the SST anchor's transporter,
+  within `--transmute` and the essentia floor; the successful swap is
+  applied to the stored snapshot via `Client::trade_stored_delta`.
+  Otherwise report the shortfall.
 - Docked-ship objectives: count anchor-body docked ships meeting the stat
   minimums (`port_all_ships`); check free port slots (2 x sum of port
   levels). Shortfall -> transfer qualifying docked ships from other
@@ -475,21 +482,68 @@ limit short-circuit from `Client::call`) exits cleanly.
 
 ## Cache notes
 
-- Read via Client wrappers: `mission_list` (600 s, always stale at the 30-min
-  cadence), `body_buildings`, `body_status`, `port_all_ships`, `body_plans`,
+Stored resources and trade-ship selection are the RPC-dominant paths; they
+run entirely through Client-level caches so that no script burns the daily
+budget re-querying them:
+
+- `Client::trade_stored_resources(body_id, stale => N)` wraps
+  `trade/get_stored_resources` in a Client `misc` cache
+  (`trade_stored_resources_<body_id>`, a `{_fetched, resources}` snapshot,
+  trusted for `--stored-ttl` minutes, default 30). Snapshots carry their
+  own `_fetched` epoch so corrections never reset the TTL clock.
+- `Client::trade_stored_delta(body_id, deltas, as_of)` applies known
+  quantity changes to a warm snapshot (positive or negative), skipping
+  events older than the snapshot; cold bodies are untouched and simply
+  refetch.
+- `Client::trade_push` maintains the cache automatically on every push:
+  it subtracts the resource cargo from the source snapshot at departure
+  and records a pending arrival in the persistent
+  `trade_pending_arrivals` tracker (`{body_id, ship_id, eta, cargo}` -
+  resource items only; plan/glyph cargo is excluded because
+  `trade_push` already revalidates the target's plans/glyphs/ship caches
+  to the ship's arrival). The tracker is shared infrastructure: any future
+  script that trades through `Client::trade_push` gets tracking for free.
+- `Client::trade_arrivals(body_ids)` runs once per missionay run before
+  any stored read: it merges the cached body-status
+  `incoming_own_ships`/`incoming_ally_ships` (ship id + arrival time,
+  zero extra RPC) with the tracker into one list per body, marking each
+  arrival known (ours, with cargo) or unknown. Landed known-with-cargo
+  entries update the target snapshot (guarded by `_fetched` so a snapshot
+  fetched after landing is never double-counted); landed unknown entries
+  invalidate the target snapshot only when the ship is trade-relevant -
+  type resolved from cached port ship lists, with
+  CargoExchange-capable/ally/unresolvable ships treated as relevant and
+  probes and other non-cargo own traffic ignored so probe_hunter cannot
+  defeat the cache. Week-old entries are pruned. The merged list is
+  reported per body (`arriving: N known with cargo, N known, N unknown;
+  next <eta>`).
+- Haulers are chosen from cached `port_all_ships` lists
+  (`Client::trade_ship_types()` - the CargoExchange-capable set parsed
+  from the server clone - docked with hold space, biggest hold first);
+  `trade/get_trade_ships` is never called. A stale-list push failure is
+  handled by the existing per-call error recovery.
+- Resource production rates come from `estimated_body_status` (zero RPC),
+  falling back to `body_status` when no snapshot exists. A zero-RPC
+  aggregate gate skips haul-source bodies whose category total (from
+  `estimated_body_status`) cannot cover the shortfall.
+- `transmute_resource` success and successful `mission_complete` apply
+  their known resource changes via `trade_stored_delta` (update, never
+  invalidate).
+- Read via Client wrappers: `mission_list` (600 s, always stale at the
+  30-min cadence), `body_buildings`, `port_all_ships`, `body_plans`,
   `glyph_list`.
 - `mission_complete`/`mission_skip` invalidate the building's mission list;
   `mission_complete` also invalidates the anchor's ship cache when ship-stat
   text appears.
 - `send_ship` invalidates the sending body's ship list; `name_ship`
-  invalidates the renamed body's ship list. `trade_push` changes the source
-  body's stores (status cache) and the ship list; `add_to_market` changes
-  the anchor's plan holdings (plans cache) and spends empire essentia.
-- `estimated_body_status` advances stale snapshots at zero RPC cost for
-  store/happiness checks.
-- Direct raw calls used: `trade/get_stored_resources`, `trade/get_trade_ships`,
-  `shipyard/get_buildable`, `transporter/trade_one_for_one`,
-  `transporter/add_to_market`, `transporter/view_my_market`.
+  invalidates the renamed body's ship list; `add_to_market` changes the
+  anchor's plan holdings (plans cache) and spends empire essentia.
+- Direct raw calls remaining: `shipyard/get_buildable`,
+  `transporter/trade_one_for_one`, `transporter/add_to_market`,
+  `transporter/view_my_market`.
+- Projected steady-state cost: ~4 `mission_list` + ~4 `port_all_ships` +
+  at most one stored-resource fetch per body per run (TTL-bounded) plus
+  actual work calls - roughly 500-600 RPC/day.
 
 ## Edge cases
 

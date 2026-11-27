@@ -17,11 +17,12 @@ BEGIN {
 require $script;
 
 our ($noaction, $quiet, $missions_dir, $debug, $copies_goal, $copies_keep, $list_at,
+     $stored_ttl,
      $client, $empire_name, $essentia_floor, $transmute_cap, $sst_body_id,
      $current_body_name, $server_mission_dir, $server_lib_dir,
      @ore_types, @food_types,
      %buildings_for, %mc_for, %trade_for, %transporter_for, %ports_for, %yards_for,
-     %body_coords, %body_name, %glyph_halls_cache);
+     %body_coords, %body_name, %glyph_halls_cache, %ships_by_body);
 
 $noaction = 1;
 $quiet    = 1;
@@ -1227,6 +1228,52 @@ subtest 'prioritized ship specs' => sub {
   $server_mission_dir = $saved_missions;
   $server_lib_dir = $saved_lib;
   %glyph_halls_cache = %$saved_cache;
+};
+
+subtest 'trade ship selection and source gate' => sub {
+  plan tests => 6;
+  %ships_by_body = (
+    10 => [
+      { id => 1, type => 'dory',    task => 'Docked',     hold_size => 5000 },
+      { id => 2, type => 'barge',   task => 'Travelling', hold_size => 20000 },
+      { id => 3, type => 'probe',   task => 'Docked',     hold_size => 100 },
+      { id => 4, type => 'galleon', task => 'Docked',     hold_size => 100000 },
+    ],
+  );
+  my $ship = trade_ship_for(10, { dory => 1, barge => 1, galleon => 1 });
+  is($ship->{id}, 4, 'biggest docked trade-capable hold wins');
+  $ship = trade_ship_for(10, { dory => 1 });
+  is($ship->{id}, 1, 'type filter narrows the choice');
+  is(trade_ship_for(10, {}), undef, 'no capable types means no hauler');
+  is(trade_ship_for(11, { dory => 1 }), undef, 'unknown body has no hauler');
+  %ships_by_body = ();
+
+  my $saved_client = $client;
+  $client = FakeClient->new(responses => {
+    estimated_body_status => sub {
+      my ($self, $body_id) = @_;
+      return { ore_stored => $body_id == 10 ? 2000 : 100 };
+    },
+  });
+  ok(source_could_supply(10, 'gold', 1500), 'aggregate covers the shortfall');
+  ok(!source_could_supply(11, 'gold', 1500), 'aggregate gate rejects thin sources');
+  $client = $saved_client;
+};
+
+subtest 'anchor stored via client cache' => sub {
+  plan tests => 3;
+  my $saved_client = $client;
+  $client = FakeClient->new(responses => {
+    trade_stored_resources => { resources => { gold => 5 } },
+  });
+  is_deeply(anchor_stored(42), { gold => 5 }, 'stored resources served from the client cache');
+  $client = FakeClient->new(responses => {});
+  is_deeply(anchor_stored(43), {}, 'missing entry degrades to empty');
+  $client = FakeClient->new(responses => {
+    trade_stored_resources => { resources => undef },
+  });
+  is_deeply(anchor_stored(44), {}, 'resources-less entry degrades to empty');
+  $client = $saved_client;
 };
 
 done_testing();

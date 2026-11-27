@@ -14,6 +14,9 @@ use Scalar::Util qw(blessed);
 use Time::Local;
 use List::Util qw(min max first);
 
+our $SERVER_LIB_DIR = "../lacuna_server/server/lib";
+our %trade_ship_types;
+
 {
   package LacunaRPCException;
   use overload 'bool' => sub { 1 },
@@ -1280,7 +1283,7 @@ sub trade_push {
     # unloads on arrival), so its caches are tightened to the arrival time
     # rather than dropped now.  With no parseable arrival time, fall back
     # to dropping them.
-    my $fleet = $result->{fleet} || {};
+    my $fleet = $result->{ship} || $result->{fleet} || {};
     my $arrival = parse_time($fleet->{date_arrives})
                || parse_time($fleet->{details}{date_available});
     my @target_types = qw(body_status buildings spaceport_view_all_ships plans glyphs);
@@ -1290,8 +1293,201 @@ sub trade_push {
     else {
       $self->cache_invalidate( type => $_, id => $target_id ) for @target_types;
     }
+    $self->_trade_track_push($sender_id, $target_id, $items, $fleet, $arrival);
   }
   return $result;
+}
+
+sub trade_ship_types {
+    return %trade_ship_types if %trade_ship_types;
+    my $fleet_pm = File::Spec->catfile($SERVER_LIB_DIR, 'Lacuna', 'DB', 'Result', 'Fleet.pm');
+    return unless -f $fleet_pm;
+    open(my $fh, '<', $fleet_pm) or return;
+    my %class_for;
+    while (my $line = <$fh>) {
+        next unless $line =~ /^\s*'(\w+)'\s*=>\s*'(Lacuna::DB::Result::Fleet::\w+)'/;
+        $class_for{$1} = $2;
+    }
+    close $fh;
+    my %types;
+    for my $type (sort keys %class_for) {
+        (my $class_file = $class_for{$type}) =~ s/.*Fleet:://;
+        $class_file .= '.pm';
+        my $path = File::Spec->catfile($SERVER_LIB_DIR, 'Lacuna', 'DB', 'Result', 'Fleet', $class_file);
+        next unless -f $path;
+        open(my $cfh, '<', $path) or next;
+        while (my $cline = <$cfh>) {
+            if ($cline =~ /Arrive::CargoExchange/) {
+                $types{$type} = 1;
+                last;
+            }
+        }
+        close $cfh;
+    }
+    %trade_ship_types = %types;
+    return %trade_ship_types;
+}
+
+sub trade_stored_resources {
+  my $self = shift;
+  my $body_id = shift;
+  my %opts = @_;
+  my $ttl = defined($opts{stale}) ? $opts{stale} : 1800;
+  my $id = "trade_stored_resources_$body_id";
+  my $entry = $self->cache_read(type => 'misc', id => $id);
+  if ($entry && ($entry->{_fetched} || 0) > time() - $ttl) {
+    return $entry;
+  }
+  $self->cache_invalidate(type => 'misc', id => $id) if $entry;
+  my ($trade) = $self->find_building($body_id, "Trade Ministry");
+  return unless $trade;
+  my $result = eval { $self->call(trade => get_stored_resources => $trade->{id}) };
+  if (my $e = Exception::Class->caught('LacunaRPCException')) {
+    return;
+  }
+  die $@ if $@;
+  $entry = { resources => ($result->{resources} || {}), _fetched => time() };
+  $self->cache_write(type => 'misc', id => $id, data => $entry, invalid => time() + 7 * 86400);
+  return $entry;
+}
+
+sub trade_stored_delta {
+  my $self = shift;
+  my $body_id = shift;
+  my $deltas = shift;
+  my $as_of = @_ ? $_[0] : time();
+  return unless $deltas && %$deltas;
+  my $id = "trade_stored_resources_$body_id";
+  my $entry = $self->cache_read(type => 'misc', id => $id) or return;
+  return if ($entry->{_fetched} || 0) > $as_of;
+  $entry->{resources}{$_} += $deltas->{$_} for keys %$deltas;
+  $self->cache_write(type => 'misc', id => $id, data => $entry,
+                     invalid => ($entry->{_invalid} || (time() + 7 * 86400)));
+  return $entry;
+}
+
+sub _trade_arrivals {
+  my $self = shift;
+  return $self->cache_read(type => 'misc', id => 'trade_pending_arrivals') || { arrivals => [] };
+}
+
+sub _trade_arrivals_save {
+  my $self = shift;
+  my $tracker = shift;
+  $self->cache_write(type => 'misc', id => 'trade_pending_arrivals',
+                     data => $tracker, invalid => time() + 7 * 86400);
+  return;
+}
+
+sub _trade_track_push {
+  my $self = shift;
+  my ($sender_id, $target_id, $items, $ship, $arrival) = @_;
+  return unless $sender_id && $target_id;
+  my (%deltas, @cargo);
+  for my $item (@{$items || []}) {
+    my $type = $item->{type} || '';
+    next if $type =~ /^(?:plan|glyph|prisoner|fleet|ship|spy)\z/;
+    $deltas{$type} -= $item->{quantity} || 0;
+    push @cargo, { name => $type, quantity => $item->{quantity} || 0 };
+  }
+  $self->trade_stored_delta($sender_id, \%deltas) if %deltas;
+  return unless $arrival && $arrival > time();
+  my $tracker = $self->_trade_arrivals();
+  push @{$tracker->{arrivals}}, {
+    body_id => $target_id,
+    ship_id => $ship->{id},
+    eta     => $arrival,
+    known   => 1,
+    cargo   => \@cargo,
+  };
+  $self->_trade_arrivals_save($tracker);
+  return;
+}
+
+sub _trade_ship_type_for {
+  my ($self, $body_ids, $ship_id) = @_;
+  for my $body_id (@$body_ids) {
+    my $result = eval { $self->port_all_ships($body_id) };
+    next unless $result;
+    for my $ship (@{$result->{ships} || []}) {
+      return $ship->{type} if ($ship->{id} || 0) == $ship_id;
+    }
+  }
+  return;
+}
+
+sub trade_arrivals {
+  my $self = shift;
+  my $body_ids = shift;
+  my $now = time();
+  my %types = $self->trade_ship_types();
+  my $tracker = $self->_trade_arrivals();
+  my @kept;
+  my %by_body;
+  for my $entry (@{$tracker->{arrivals} || []}) {
+    next if $entry->{eta} && $now - $entry->{eta} > 7 * 86400;
+    $entry->{known} = defined($entry->{known}) ? $entry->{known} : 0;
+    push @kept, $entry;
+    push @{$by_body{$entry->{body_id}}}, $entry;
+  }
+  for my $body_id (@$body_ids) {
+    my $buildings = eval { $self->body_buildings($body_id) };
+    if (my $e = Exception::Class->caught('LacunaRPCException')) {
+      next;
+    }
+    die $@ if $@;
+    next unless $buildings;
+    my $status = $buildings->{status}{body};
+    my @incoming = (@{$status->{incoming_own_ships} || []},
+                    @{$status->{incoming_ally_ships} || []});
+    my @entries = @{$by_body{$body_id} || []};
+    my %entry_ids = map { ($_->{ship_id} || 0) => 1 } @entries;
+    my @still_kept;
+    for my $entry (@entries) {
+      if ($entry->{eta} && $entry->{eta} <= $now) {
+        if ($entry->{known} && $entry->{cargo} && @{$entry->{cargo}}) {
+          $self->trade_stored_delta($body_id,
+            { map { ($_->{name} || '') => ($_->{quantity} || 0) } @{$entry->{cargo}} },
+            $entry->{eta});
+        }
+        elsif (!$entry->{known}) {
+          my $type = $entry->{type};
+          if (!defined $type || $types{$type} || $entry->{is_ally}) {
+            $self->cache_invalidate(type => 'misc', id => "trade_stored_resources_$body_id");
+          }
+        }
+        $entry->{landed} = 1;
+        next;
+      }
+      push @still_kept, $entry;
+    }
+    for my $ship (@incoming) {
+      my $sid = $ship->{id} || 0;
+      next if $entry_ids{$sid};
+      my $eta = parse_time($ship->{date_arrives}) || 0;
+      next unless $eta;
+      my $is_ally = $ship->{is_ally} ? 1 : 0;
+      my $type;
+      unless ($is_ally) {
+        $type = $self->_trade_ship_type_for($body_ids, $sid);
+        next if defined $type && !$types{$type};
+      }
+      push @still_kept, {
+        body_id => $body_id, ship_id => $sid, eta => $eta,
+        known => 0, is_ally => $is_ally, type => $type,
+      };
+    }
+    @kept = grep { $_->{body_id} != $body_id } @kept;
+    push @kept, @still_kept;
+    $by_body{$body_id} = [@still_kept];
+  }
+  $tracker->{arrivals} = [ grep { !$_->{landed} } @kept ];
+  $self->_trade_arrivals_save($tracker);
+  my %merged;
+  for my $body_id (@$body_ids) {
+    $merged{$body_id} = [ sort { $a->{eta} <=> $b->{eta} } @{$by_body{$body_id} || []} ];
+  }
+  return \%merged;
 }
 
 sub transporter_push {

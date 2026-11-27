@@ -31,6 +31,7 @@ our $essentia_floor_override;
 our $copies_goal = 9;
 our $copies_keep = 6;
 our $list_at     = 20;
+our $stored_ttl  = 30;
 our $missions_dir = "missions";
 our $lookback_days = 30;
 our $server_mission_dir = "../lacuna_server/mission/missions";
@@ -38,6 +39,7 @@ our $server_lib_dir = "../lacuna_server/server/lib";
 our %glyph_halls_cache;
 our @ore_types;
 our @food_types;
+our %ships_by_body;
 
 our $client;
 our $empire_name;
@@ -68,6 +70,7 @@ Usage: $0 [--body Name] [options]
   --goal           LCOT plan copies to accumulate per letter (default 9)
   --keep           LCOT copies retained before selling surplus (default 6)
   --list-at        SST ask price per surplus plan copy (default 20)
+  --stored-ttl     Minutes to trust cached stored resources (default 30)
   --help           Show this help
 END
 }
@@ -105,6 +108,7 @@ sub parse_args {
     "goal=i"            => \$copies_goal,
     "keep=i"            => \$copies_keep,
     "list-at=i"         => \$list_at,
+    "stored-ttl=i"      => \$stored_ttl,
   ) or die "Try '$0 --help' for usage.\n";
   usage() and exit 0 if $help;
   return;
@@ -676,6 +680,9 @@ sub online_run {
   my @mcs = locate_mission_commands(\@body_ids);
   emit("no Mission Command on any body; nothing to do"), return unless @mcs;
 
+  %ships_by_body = map { $_ => body_ships($_) } @body_ids;
+  sync_and_report_arrivals(\@body_ids);
+
   my ($vended, $fresh_by_building) = vend_and_record(\@mcs);
   retire_from_lists($vended, $fresh_by_building);
 
@@ -968,9 +975,10 @@ sub empire_resource_rates {
   my $body_ids = shift;
   my %rates = map { $_ => 0 } qw(water energy waste ore food);
   for my $body_id (@$body_ids) {
-    my $status = eval { $client->body_status($body_id) };
+    my $status = $client->estimated_body_status($body_id);
+    $status = eval { $client->body_status($body_id) } unless $status;
     if (my $e = Exception::Class->caught('LacunaRPCException')) {
-      emit_debug("body_status failed for $body_id: " . $e->error);
+      emit_debug("body status unavailable for $body_id: " . $e->error);
       next;
     }
     die $@ if $@;
@@ -1193,6 +1201,37 @@ sub rewards_glyph_halls {
     my $key = plan_class_key($plan->{class_name});
     return $plan->{class_name} if $keys{$key};
   }
+  return;
+}
+
+sub sync_and_report_arrivals {
+  my $body_ids = shift;
+  my $arrivals = $client->trade_arrivals($body_ids);
+  for my $body_id (@$body_ids) {
+    my @pending = @{$arrivals->{$body_id} || []};
+    next unless @pending;
+    my ($known_cargo, $known_bare, $unknown) = (0, 0, 0);
+    for my $arrival (@pending) {
+      if    ($arrival->{known} && $arrival->{cargo} && @{$arrival->{cargo}}) { $known_cargo++ }
+      elsif ($arrival->{known})                                            { $known_bare++ }
+      else                                                                 { $unknown++ }
+    }
+    $current_body_name = $body_name{$body_id} || $body_id;
+    emit(sprintf("arriving: %d known with cargo, %d known, %d unknown; next %s",
+                 $known_cargo, $known_bare, $unknown,
+                 $pending[0]{eta} ? Client::format_time($pending[0]{eta}) : '?'));
+    if ($debug) {
+      for my $arrival (@pending) {
+        emit_debug(sprintf("  ship %s eta %s known=%d has_cargo=%d type=%s",
+                            $arrival->{ship_id} // '?',
+                            $arrival->{eta} ? Client::format_time($arrival->{eta}) : '?',
+                            $arrival->{known} ? 1 : 0,
+                            ($arrival->{cargo} && @{$arrival->{cargo}}) ? 1 : 0,
+                            $arrival->{type} // ($arrival->{is_ally} ? 'ally' : 'unknown')));
+      }
+    }
+  }
+  $current_body_name = undef;
   return;
 }
 
@@ -1432,16 +1471,38 @@ sub report_missing_ship_type {
 
 sub anchor_stored {
   my $anchor_id = shift;
-  return {} unless $trade_for{$anchor_id};
-  my $result = eval {
-    $client->call(trade => get_stored_resources => $trade_for{$anchor_id})
-  };
-  if (my $e = Exception::Class->caught('LacunaRPCException')) {
-    emit_debug("stored resources failed for $anchor_id: " . $e->error);
-    return {};
-  }
-  die $@ if $@;
-  return $result->{resources} || {};
+  my $entry = $client->trade_stored_resources($anchor_id, stale => $stored_ttl * 60);
+  return $entry && $entry->{resources} ? $entry->{resources} : {};
+}
+
+sub category_aggregate_key {
+  my $resource = shift;
+  load_resource_types();
+  return 'water_stored'  if $resource eq 'water';
+  return 'energy_stored' if $resource eq 'energy';
+  return 'waste_stored'  if $resource eq 'waste';
+  return 'ore_stored'    if grep { $_ eq $resource } @ore_types;
+  return 'food_stored'   if grep { $_ eq $resource } @food_types;
+  return;
+}
+
+sub source_could_supply {
+  my ($body_id, $resource, $quantity) = @_;
+  my $key = category_aggregate_key($resource) or return 1;
+  my $status = $client->estimated_body_status($body_id);
+  return 1 unless $status && defined $status->{$key};
+  return ($status->{$key} || 0) >= $quantity;
+}
+
+sub trade_ship_for {
+  my ($body_id, $types_override) = @_;
+  my %types = $types_override ? %$types_override : Client::trade_ship_types();
+  my @candidates = grep {
+    ($_->{task} || '') eq 'Docked'
+    && ($_->{hold_size} || 0) > 0
+    && $types{$_->{type} || ''}
+  } @{$ships_by_body{$body_id} || []};
+  return (sort { ($b->{hold_size} || 0) <=> ($a->{hold_size} || 0) } @candidates)[0];
 }
 
 sub haul_resource {
@@ -1451,17 +1512,13 @@ sub haul_resource {
   for my $body_id (@$body_ids) {
     next unless $body_id != $anchor_id;
     next unless $trade_for{$body_id};
-    my $source = eval {
-      $client->call(trade => get_stored_resources => $trade_for{$body_id})
-    };
-    next unless $source && $source->{resources};
-    my $surplus = ($source->{resources}{$resource} || 0) - $quantity;
+    next unless source_could_supply($body_id, $resource, $quantity);
+    my $entry_stored = $client->trade_stored_resources($body_id, stale => $stored_ttl * 60);
+    next unless $entry_stored && $entry_stored->{resources};
+    my $surplus = ($entry_stored->{resources}{$resource} || 0) - $quantity;
     next unless $surplus > 0;
-    my $ships = eval {
-      $client->call(trade => get_trade_ships => $trade_for{$body_id}, $anchor_id)
-    };
-    next unless $ships && @{$ships->{ships} || []};
-    my ($ship) = sort { ($b->{hold_size} || 0) <=> ($a->{hold_size} || 0) } @{$ships->{ships}};
+    my $ship = trade_ship_for($body_id);
+    next unless $ship;
     my $load = min($quantity, $ship->{hold_size} || 0, $surplus);
     next unless $load > 0;
     emit("hauling $load $resource from $body_id to $anchor_id on ship $ship->{id}");
@@ -1480,7 +1537,7 @@ sub haul_resource {
       next;
     }
     die $@ if $@;
-    my $eta = Client::parse_time($result->{fleet}{date_arrives});
+    my $eta = Client::parse_time(($result->{ship} || $result->{fleet} || {})->{date_arrives});
     record_action($rec, { action => 'haul', resource => $resource, quantity => $load,
                            from => $body_id, result => 'ok', eta => $eta });
     emit("hauled; " . ($eta ? "arrives " . Client::format_time($eta) : 'arrival unknown'));
@@ -1521,6 +1578,7 @@ sub transmute_resource {
   die $@ if $@;
   record_action($rec, { action => 'transmute', have => $have_res, want => $want_res,
                         quantity => $quantity, result => 'ok' });
+  $client->trade_stored_delta($anchor_id, { $have_res => -$quantity, $want_res => $quantity });
   $transmute_cap--;
   return 'transmuted';
 }
@@ -1605,11 +1663,8 @@ sub push_cargo {
     next unless $trade_for{$body_id};
     my $item = $find_cargo->($body_id);
     next unless $item;
-    my $ships = eval {
-      $client->call(trade => get_trade_ships => $trade_for{$body_id}, $anchor_id)
-    };
-    next unless $ships && @{$ships->{ships} || []};
-    my ($ship) = sort { ($b->{hold_size} || 0) <=> ($a->{hold_size} || 0) } @{$ships->{ships}};
+    my $ship = trade_ship_for($body_id);
+    next unless $ship;
     emit("pushing $kind cargo from $body_id to $anchor_id on ship $ship->{id}");
     if ($noaction) {
       record_action($rec, { action => 'push', kind => $kind, from => $body_id,
@@ -1624,7 +1679,7 @@ sub push_cargo {
       next;
     }
     die $@ if $@;
-    my $eta = Client::parse_time($result->{fleet}{date_arrives});
+    my $eta = Client::parse_time(($result->{ship} || $result->{fleet} || {})->{date_arrives});
     record_action($rec, { action => 'push', kind => $kind, from => $body_id,
                            result => 'ok', eta => $eta });
     return 'pushed';
@@ -1635,7 +1690,9 @@ sub push_cargo {
 sub fulfill_missions {
   my ($todo, $plan_lists) = @_;
   my @body_ids = sort keys %$plan_lists;
-  my %ships_by_body = map { $_ => body_ships($_) } @body_ids;
+  for my $body_id (@body_ids) {
+    $ships_by_body{$body_id} = body_ships($body_id) unless $ships_by_body{$body_id};
+  }
   for my $entry (@$todo) {
     my $rec      = $entry->{rec};
     my $on       = $entry->{on}[0];
@@ -1874,6 +1931,10 @@ sub attempt_completion {
   $rec->{status_at}       = now_stamp();
   $rec->{status_evidence} = 'rpc:complete_mission:ok';
   record_action($rec, { action => 'complete', result => 'ok' });
+  if (%{$objectives->{resources} || {}}) {
+    $client->trade_stored_delta($anchor,
+      { map { $_ => -($objectives->{resources}{$_} || 0) } keys %{$objectives->{resources}} });
+  }
   write_json_file(record_path($missions_dir, $rec), $rec);
   emit("completed: $rec->{name} (id $rec->{id})", "success");
   return;
@@ -1922,11 +1983,8 @@ sub sst_sales {
         ($_->{plan_type} || '') =~ /^LCOT\Q$letter\E\z/i && ($_->{quantity} || 0) > 0
       } @{$plan_lists->{$body_id}{plans} || []};
       next unless $source;
-      my $ships = eval {
-        $client->call(trade => get_trade_ships => $trade_for{$body_id}, $sst_body_id)
-      };
-      next unless $ships && @{$ships->{ships} || []};
-      my ($ship) = sort { ($b->{hold_size} || 0) <=> ($a->{hold_size} || 0) } @{$ships->{ships}};
+      my $ship = trade_ship_for($body_id);
+      next unless $ship;
       emit("hauling LCOT$letter plan copy from $body_id to $sst_body_id for listing");
       if ($noaction) {
         emit("simulated: would push plan LCOT$letter to $sst_body_id");
